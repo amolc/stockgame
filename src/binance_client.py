@@ -13,6 +13,9 @@ from binance.client import Client
 # Load environment variables if .env file exists
 load_dotenv()
 
+# Use global Binance data API cluster (100% reliable across all ISPs)
+Client.API_URL = os.getenv("BINANCE_API_URL", "https://data-api.binance.vision/api")
+
 
 class BinanceDataClient:
     def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None, testnet: bool = False):
@@ -39,14 +42,6 @@ class BinanceDataClient:
         return float(ticker["price"])
 
     def get_klines(self, symbol: str = "BTCUSDT", interval: str = "15m", lookback: str = "2 days ago UTC") -> pd.DataFrame:
-        """
-        Fetch historical candlestick (kline) data directly from Binance.
-        
-        :param symbol: Trading pair (e.g., 'BTCUSDT', 'ETHUSDT')
-        :param interval: Candle interval ('1m', '5m', '15m', '1h', '4h', '1d')
-        :param lookback: Time horizon (e.g., '1 day ago UTC', '7 days ago UTC')
-        :return: Clean Pandas DataFrame with OHLCV data and datetime index
-        """
         raw_klines = self.client.get_historical_klines(
             symbol=symbol,
             interval=interval,
@@ -64,15 +59,11 @@ class BinanceDataClient:
         
         df = pd.DataFrame(raw_klines, columns=columns)
         
-        # Keep OHLCV core columns
         df = df[["open_time", "open", "high", "low", "close", "volume"]].copy()
-        
-        # Convert timestamp from milliseconds to UTC datetime
         df["datetime"] = pd.to_datetime(df["open_time"], unit="ms")
         df.set_index("datetime", inplace=True)
         df.drop(columns=["open_time"], inplace=True)
         
-        # Convert prices and volume from string to float
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
             

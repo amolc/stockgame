@@ -9,6 +9,10 @@ __pycache__/
 *$py.class
 *.so
 
+# Database
+db.sqlite3
+*.sqlite3
+
 # Environment Variables & Secrets
 .env
 .env.local

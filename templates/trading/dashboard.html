@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockGame - 24/7 Algorithmic Trading Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .glass-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; }
+    </style>
+</head>
+<body class="p-6 md:p-10">
+
+    <!-- Top Header -->
+    <header class="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-gray-800 gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-robot text-emerald-400"></i> StockGame Algorithmic Engine
+            </h1>
+            <p class="text-sm text-gray-400 mt-1">
+                Headless Binance EMA Crossover Bot • 24/7 PM2 Daemon Task • Django ORM Persistence
+            </p>
+        </div>
+        <div class="flex items-center gap-3">
+            <button onclick="triggerCycle()" id="trigger-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-2">
+                <i class="fa-solid fa-play"></i> Trigger Cycle Now
+            </button>
+            <a href="/admin/" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium text-xs rounded-lg border border-gray-700 transition-colors flex items-center gap-2">
+                <i class="fa-solid fa-gear"></i> Django Admin
+            </a>
+            <a href="/api/status/" target="_blank" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium text-xs rounded-lg border border-gray-700 transition-colors flex items-center gap-2">
+                <i class="fa-solid fa-code"></i> JSON API
+            </a>
+        </div>
+    </header>
+
+    <!-- KPI Summary Row -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <div class="glass-card p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Active Bots</div>
+            <div class="text-2xl font-black text-white mt-2">{{ bots.count }}</div>
+            <div class="text-xs text-emerald-400 mt-1">Managed via PM2 Daemon</div>
+        </div>
+        <div class="glass-card p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Total Trades</div>
+            <div class="text-2xl font-black text-white mt-2">{{ total_trades }}</div>
+            <div class="text-xs text-gray-400 mt-1">Completed Roundtrips</div>
+        </div>
+        <div class="glass-card p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Win Rate</div>
+            <div class="text-2xl font-black text-white mt-2">{{ win_rate }}%</div>
+            <div class="text-xs text-emerald-400 mt-1">{{ winning_trades }} Wins</div>
+        </div>
+        <div class="glass-card p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Net Realized PnL</div>
+            <div class="text-2xl font-black {% if total_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} mt-2">
+                ${{ total_pnl|floatformat:2 }}
+            </div>
+            <div class="text-xs text-gray-400 mt-1">All closed positions</div>
+        </div>
+    </div>
+
+    <!-- Active Bot Configurations -->
+    <div class="mt-8">
+        <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+            <i class="fa-solid fa-sliders text-cyan-400"></i> Bot Configurations
+        </h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {% for bot in bots %}
+            <div class="glass-card p-5">
+                <div class="flex justify-between items-center pb-3 border-b border-gray-800">
+                    <div>
+                        <h3 class="font-bold text-white text-base">{{ bot.name }}</h3>
+                        <span class="text-xs font-mono text-cyan-400">{{ bot.symbol }} • {{ bot.interval }}</span>
+                    </div>
+                    <div>
+                        {% if bot.is_active %}
+                        <span class="px-2.5 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Active</span>
+                        {% else %}
+                        <span class="px-2.5 py-1 text-xs rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/30">Paused</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="grid grid-cols-3 gap-3 mt-4 text-xs">
+                    <div>
+                        <div class="text-gray-400">Strategy</div>
+                        <div class="font-semibold text-white mt-1">EMA {{ bot.fast_ema_period }} / {{ bot.slow_ema_period }}</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400">Current Cash</div>
+                        <div class="font-semibold text-emerald-400 mt-1">${{ bot.current_cash|floatformat:2 }}</div>
+                    </div>
+                    <div>
+                        <div class="text-gray-400">Last Task Run</div>
+                        <div class="font-semibold text-gray-300 mt-1">
+                            {% if bot.last_run_at %}{{ bot.last_run_at|date:"H:i:s" }} UTC{% else %}Pending{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% empty %}
+            <div class="glass-card p-6 text-center text-gray-400 col-span-2">
+                No bot configured yet. Trigger a cycle to auto-create the default BTCUSDT bot!
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Two-Column Section: Executed Trades & Live Signal Stream -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+        <!-- Executed Trades -->
+        <div class="glass-card p-5">
+            <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
+                <span><i class="fa-solid fa-receipt text-amber-400 mr-2"></i> Recent Executed Trades</span>
+                <span class="text-xs text-gray-400">{{ trades.count }} records</span>
+            </h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs text-left">
+                    <thead class="text-gray-400 border-b border-gray-800">
+                        <tr>
+                            <th class="py-2">Entry</th>
+                            <th class="py-2">Price</th>
+                            <th class="py-2">Exit</th>
+                            <th class="py-2">PnL</th>
+                            <th class="py-2">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800 font-mono">
+                        {% for t in trades %}
+                        <tr>
+                            <td class="py-2.5 text-gray-300">{{ t.entry_time|date:"m-d H:i" }}</td>
+                            <td class="py-2.5 text-white">${{ t.entry_price|floatformat:2 }}</td>
+                            <td class="py-2.5 text-gray-300">{% if t.exit_time %}{{ t.exit_time|date:"m-d H:i" }}{% else %}-{% endif %}</td>
+                            <td class="py-2.5 font-bold {% if t.pnl and t.pnl >= 0 %}text-emerald-400{% elif t.pnl %}text-rose-400{% else %}text-gray-400{% endif %}">
+                                {% if t.pnl %}${{ t.pnl|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="py-2.5">
+                                {% if t.status == 'OPEN' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400">HOLDING</span>
+                                {% elif t.is_win %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400">WIN</span>
+                                {% else %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400">LOSS</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Live Signal Stream Log -->
+        <div class="glass-card p-5">
+            <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
+                <span><i class="fa-solid fa-satellite-dish text-cyan-400 mr-2"></i> Signal Evaluation Stream</span>
+                <span class="text-xs text-gray-400">{{ signals.count }} logs</span>
+            </h2>
+            <div class="overflow-x-auto max-h-[380px] overflow-y-auto">
+                <table class="w-full text-xs text-left">
+                    <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
+                        <tr>
+                            <th class="py-2">Time (UTC)</th>
+                            <th class="py-2">Symbol</th>
+                            <th class="py-2">Price</th>
+                            <th class="py-2">Signal</th>
+                            <th class="py-2">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-800 font-mono">
+                        {% for s in signals %}
+                        <tr>
+                            <td class="py-2 text-gray-400">{{ s.timestamp|date:"m-d H:i" }}</td>
+                            <td class="py-2 text-white">{{ s.symbol }}</td>
+                            <td class="py-2 text-gray-300">${{ s.price|floatformat:2 }}</td>
+                            <td class="py-2">
+                                {% if s.signal_type == 'BUY' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>
+                                {% elif s.signal_type == 'SELL' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-bold">SELL</span>
+                                {% else %}
+                                <span class="text-gray-500">HOLD</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-2 text-[11px] text-gray-400 truncate max-w-[160px]">{{ s.message }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="py-4 text-center text-gray-500">No signals evaluated yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function triggerCycle() {
+            const btn = document.getElementById('trigger-btn');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running...';
+            try {
+                const res = await fetch('/api/trigger-cycle/');
+                const data = await res.json();
+                window.location.reload();
+            } catch (err) {
+                alert('Cycle trigger error: ' + err);
+                btn.innerHTML = '<i class="fa-solid fa-play"></i> Trigger Cycle Now';
+            }
+        }
+    </script>
+
+</body>
+</html>
