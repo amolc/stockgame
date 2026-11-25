@@ -31,6 +31,12 @@ class BotConfig(models.Model):
     
     initial_capital = models.DecimalField(max_digits=16, decimal_places=2, default=10000.00)
     current_cash = models.DecimalField(max_digits=16, decimal_places=2, default=10000.00)
+    order_amount_usdt = models.DecimalField(
+        max_digits=16,
+        decimal_places=2,
+        default=50.00,
+        help_text="Fixed USDT order size per automated BUY (minimum $10)"
+    )
     fee_pct = models.DecimalField(max_digits=6, decimal_places=4, default=0.0010, help_text="Trading fee (0.0010 = 0.1%)")
     
     is_active = models.BooleanField(default=True, help_text="Toggle bot execution on or off")

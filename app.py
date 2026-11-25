@@ -1,53 +1,90 @@
 """
-Binance Crypto Trading & Analytics Dashboard
-Built with Streamlit, Plotly, Pandas, and python-binance.
-Features real Binance market data, EMA Crossover strategy, and Paper Trading simulator.
-Supports automatic live background refresh via modern st.fragment.
+Binance Crypto Trading & Analytics Dashboard (Streamlit - Port 8501)
+Live Binance Spot Testnet Manual Trading Terminal & Chart Analytics.
+Directly uses core trading functions from trading.services.binance_trader:
+  - getdata()
+  - positions()
+  - buy()
+  - buyclose()
+  - sell()
+  - sellclose()
+  - reset()
+Preserves chart zoom/pan state across auto-refreshes using Plotly's uirevision.
 """
 
+import os
+import sys
+from pathlib import Path
 from datetime import datetime, timezone
-import streamlit as st
+from decimal import Decimal
 import pandas as pd
 import plotly.graph_objects as go
-from src.binance_client import BinanceDataClient
-from src.strategy import generate_crossover_signals
-from src.simulator import PaperTradingSimulator
+import streamlit as st
+from dotenv import load_dotenv
 
-# 1. Page Configuration
+# 1. Setup Django environment for database access
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "stockgame.settings")
+import django
+django.setup()
+
+from trading.services.binance_trader import BinanceTrader
+from trading.models import BotConfig, Trade, SignalLog
+from src.strategy import generate_crossover_signals
+
+load_dotenv()
+
+# 2. Page Configuration
 st.set_page_config(
-    page_title="Binance Crypto Trading & EMA Dashboard",
-    page_icon="📈",
+    page_title="Binance Testnet Trading Terminal",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
+# Custom Dark Styling
 st.markdown("""
 <style>
     .metric-card {
-        background-color: #0e1117;
-        border: 1px solid #262730;
+        background-color: #161b22;
+        border: 1px solid #30363d;
         border-radius: 8px;
-        padding: 16px;
+        padding: 14px;
         text-align: center;
     }
     .metric-value {
-        font-size: 24px;
+        font-size: 22px;
         font-weight: 700;
+        color: #f0f6fc;
     }
     .metric-label {
-        font-size: 13px;
+        font-size: 12px;
         color: #8b949e;
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
+    .stButton>button {
+        border-radius: 6px;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. Sidebar Controls
-st.sidebar.title("⚙️ Trading Configuration")
 
-# Market Data Settings
+# 3. Singleton Trader Instance (Reuses HTTPS connection pool)
+@st.cache_resource
+def get_trader_instance():
+    return BinanceTrader()
+
+trader = get_trader_instance()
+
+
+# 4. Sidebar Configuration
+st.sidebar.title("⚡ Terminal Settings")
+
 st.sidebar.subheader("Market Instrument")
 preset_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "Custom"]
 selected_symbol_preset = st.sidebar.selectbox("Symbol", preset_symbols, index=0)
@@ -57,9 +94,9 @@ else:
     symbol = selected_symbol_preset
 
 interval = st.sidebar.selectbox(
-    "Timeframe Interval",
+    "Candle Interval",
     options=["1m", "5m", "15m", "1h", "4h", "1d"],
-    index=0  # Default 1m for fastest real-time action!
+    index=0  # Default 1m for active real-time viewing
 )
 
 lookback_options = {
@@ -69,236 +106,321 @@ lookback_options = {
     "14 Days": "14 days ago UTC",
     "30 Days": "30 days ago UTC"
 }
-selected_lookback_label = st.sidebar.selectbox("Lookback Horizon", list(lookback_options.keys()), index=0)
+selected_lookback_label = st.sidebar.selectbox("Lookback Window", list(lookback_options.keys()), index=0)
 lookback = lookback_options[selected_lookback_label]
 
-# Strategy Settings
-st.sidebar.subheader("EMA Strategy Parameters")
+st.sidebar.subheader("Strategy Indicators")
 fast_ema = st.sidebar.slider("Fast EMA Period", min_value=5, max_value=50, value=20, step=1)
 slow_ema = st.sidebar.slider("Slow EMA Period", min_value=15, max_value=200, value=50, step=1)
 
-if fast_ema >= slow_ema:
-    st.sidebar.warning("⚠️ Fast EMA should be smaller than Slow EMA for valid crossover signals.")
-
-# Simulator Settings
-st.sidebar.subheader("Simulation Account")
-initial_capital = st.sidebar.number_input("Starting Capital (USDT)", min_value=100.0, max_value=1000000.0, value=10000.0, step=500.0)
-
-# Auto-Refresh Settings
-st.sidebar.subheader("📡 Live Data Stream")
-auto_refresh = st.sidebar.checkbox("Auto-Refresh Automatically", value=True)
-refresh_interval = st.sidebar.slider("Refresh Every (seconds)", min_value=3, max_value=60, value=5, step=1)
+st.sidebar.subheader("📡 Live Stream Control")
+auto_refresh = st.sidebar.checkbox("Auto-Refresh Candlesticks", value=True)
+refresh_interval = st.sidebar.slider("Refresh Interval (seconds)", min_value=1, max_value=60, value=2, step=1)
 
 refresh_btn = st.sidebar.button("🔄 Manual Refresh Now", use_container_width=True)
 
-# 3. Initialize Binance Client & Connection Status
-@st.cache_resource
-def get_client():
-    return BinanceDataClient()
 
-client = get_client()
+# Initialize session state for zoom controls
+if "zoom_version" not in st.session_state:
+    st.session_state.zoom_version = 0
 
-# Header Section
+zoom_key = f"{symbol}_{interval}_{st.session_state.zoom_version}"
+
+# 5. Header Section
 header_col1, header_col2 = st.columns([3, 1])
 with header_col1:
-    st.title("📈 Binance EMA Algorithmic Dashboard")
-    st.caption("Direct Binance API Data • EMA 20/50 Crossover Signals • Paper Trading Execution")
+    st.title("⚡ Binance Testnet Manual Trading Terminal")
+    st.caption("Live Testnet API Execution • Persistent Chart Zoom • Direct `binance_trader.py` Core Engine")
 
 with header_col2:
-    if client.is_authenticated():
-        st.success("🟢 Authenticated Mode (API Keys Active)")
+    if trader.is_authenticated:
+        st.success("🟢 Authenticated (Binance Spot Testnet)")
     else:
-        st.info("🌐 Public Mode (Real Binance Data • Paper Simulation)")
+        st.warning("⚠️ Public / Paper Mode (No API Keys)")
 
-# 4. Live Dashboard Rendering Fragment
+
+# 6. Live Fragment: Auto-Refreshing Market View & Chart
 run_every_param = refresh_interval if auto_refresh else None
 
+
 @st.fragment(run_every=run_every_param)
-def render_live_dashboard():
+def render_terminal():
     now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    
-    # Live status badge
-    stream_badge = f"🟢 **LIVE STREAM ACTIVE** (Auto-refreshing every {refresh_interval}s • Last: {now_utc})" if auto_refresh else f"⏸️ **AUTO-REFRESH PAUSED** (Last: {now_utc})"
-    st.markdown(stream_badge)
 
-    try:
-        # Fetch OHLCV data directly from Binance
-        raw_df = client.get_klines(symbol=symbol, interval=interval, lookback=lookback)
-        
-        # Calculate EMAs and Crossover Signals
-        df = generate_crossover_signals(raw_df, fast_period=fast_ema, slow_period=slow_ema)
-        
-        # Run Simulator
-        simulator = PaperTradingSimulator(initial_capital=initial_capital)
-        metrics = simulator.run(df)
+    # Fetch live account positions and balances from binance_trader
+    pos_data = trader.positions(symbol=symbol)
+    current_price = pos_data["live_price"]
+    has_pos = pos_data["has_open_position"]
+    open_pos = pos_data["open_position"]
 
-        latest_close = df["close"].iloc[-1]
-        prev_close = df["close"].iloc[-2] if len(df) > 1 else latest_close
-        price_change = latest_close - prev_close
-        price_change_pct = (price_change / prev_close) * 100.0 if prev_close else 0.0
+    # Top KPI Metrics Row
+    kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
-        # Top KPI Summary Cards
-        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+    with kpi1:
+        st.metric(
+            label=f"Live {symbol} Price",
+            value=f"${current_price:,.2f}"
+        )
 
-        with kpi1:
+    with kpi2:
+        usdt_bal = pos_data.get("real_usdt_balance")
+        usdt_val = f"${usdt_bal:,.2f}" if usdt_bal is not None else f"${pos_data['wallet_cash']:,.2f}"
+        st.metric(label="Available USDT (Cash)", value=usdt_val)
+
+    with kpi3:
+        asset_sym = symbol.replace("USDT", "")
+        coin_bal = pos_data.get("real_asset_balance")
+        coin_val = f"{coin_bal:,.5f} {asset_sym}" if coin_bal is not None else "0.00000"
+        st.metric(label=f"Wallet {asset_sym} Balance", value=coin_val)
+
+    with kpi4:
+        if has_pos and open_pos:
             st.metric(
-                label=f"Latest {symbol} Price",
-                value=f"${latest_close:,.2f}",
-                delta=f"{price_change_pct:+.2f}%"
+                label="Active Position",
+                value=f"LONG: {open_pos['quantity']:.5f} {asset_sym}",
+                delta=f"Entry: ${open_pos['entry_price']:,.2f}"
+            )
+        else:
+            st.metric(label="Active Position", value="⚪ FLAT (No Position)")
+
+    with kpi5:
+        if has_pos and open_pos:
+            pnl = open_pos["unrealized_pnl"]
+            pnl_pct = open_pos["unrealized_pnl_pct"]
+            st.metric(
+                label="Floating Unrealized PnL",
+                value=f"${pnl:+,.2f}",
+                delta=f"{pnl_pct:+.2f}%"
+            )
+        else:
+            st.metric(label="Floating Unrealized PnL", value="$0.00", delta="0.00%")
+
+    st.markdown("---")
+
+    # Main Grid: Left Column (Chart) & Right Column (Manual Trading Panel)
+    col_chart, col_trade = st.columns([3, 1])
+
+    # --- LEFT COLUMN: LIVE CHART WITH PERSISTENT ZOOM ---
+    with col_chart:
+        # Chart toolbar row: stream timestamp & reset zoom button
+        tb_col1, tb_col2 = st.columns([4, 1])
+        with tb_col1:
+            st.caption(f"📡 **Live Testnet Stream** ({interval}) • Last update: **{now_utc}** • *Mouse wheel zooms, double-click resets view*")
+        with tb_col2:
+            if st.button("🔍 Reset Zoom", key="btn_reset_zoom", use_container_width=True):
+                st.session_state.zoom_version += 1
+                st.rerun()
+
+        try:
+            # 1. getdata() from binance_trader
+            raw_df = trader.getdata(symbol=symbol, interval=interval, lookback=lookback)
+            # Calculate EMAs & Signals
+            df = generate_crossover_signals(raw_df, fast_period=fast_ema, slow_period=slow_ema)
+
+            fig = go.Figure()
+
+            # Candlestick Series
+            fig.add_trace(go.Candlestick(
+                x=df.index,
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                close=df["close"],
+                name=f"{symbol}",
+                increasing_line_color="#26a69a",
+                decreasing_line_color="#ef5350"
+            ))
+
+            # Fast EMA
+            fig.add_trace(go.Scatter(
+                x=df.index,
+                y=df[f"EMA_{fast_ema}"],
+                mode="lines",
+                name=f"Fast EMA ({fast_ema})",
+                line=dict(color="#00E5FF", width=1.5)
+            ))
+
+            # Slow EMA
+            fig.add_trace(go.Scatter(
+                x=df.index,
+                y=df[f"EMA_{slow_ema}"],
+                mode="lines",
+                name=f"Slow EMA ({slow_ema})",
+                line=dict(color="#FF9100", width=1.5)
+            ))
+
+            # Render Actual Database Trade Entries & Exits on Chart
+            recent_trades = Trade.objects.filter(symbol=symbol).order_by('-entry_time')[:15]
+            for tr in recent_trades:
+                fig.add_trace(go.Scatter(
+                    x=[tr.entry_time],
+                    y=[float(tr.entry_price)],
+                    mode="markers+text",
+                    name=f"Trade #{tr.id} Buy",
+                    text=[f"BUY #{tr.id}"],
+                    textposition="bottom center",
+                    marker=dict(symbol="triangle-up", size=13, color="#00E676", line=dict(width=1, color="#ffffff")),
+                    showlegend=False
+                ))
+                if tr.exit_time and tr.exit_price:
+                    fig.add_trace(go.Scatter(
+                        x=[tr.exit_time],
+                        y=[float(tr.exit_price)],
+                        mode="markers+text",
+                        name=f"Trade #{tr.id} Close",
+                        text=[f"SELL #{tr.id}"],
+                        textposition="top center",
+                        marker=dict(symbol="triangle-down", size=13, color="#FF1744", line=dict(width=1, color="#ffffff")),
+                        showlegend=False
+                    ))
+
+            # CRITICAL ZOOM LOCK:
+            # 1. Static title (timestamp kept outside in st.caption)
+            # 2. uirevision locked on layout, xaxis, and yaxis
+            # 3. autorange=None so user-dragged axes are NEVER reset
+            current_zoom_key = f"{symbol}_{interval}_{st.session_state.zoom_version}"
+            fig.update_layout(
+                uirevision=current_zoom_key,
+                title=f"{symbol} Real-Time Chart ({interval})",
+                xaxis=dict(
+                    uirevision=current_zoom_key,
+                    rangeslider=dict(visible=False),
+                    type="date"
+                ),
+                yaxis=dict(
+                    uirevision=current_zoom_key,
+                    fixedrange=False
+                ),
+                template="plotly_dark",
+                height=560,
+                margin=dict(l=30, r=30, t=40, b=30),
+                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
             )
 
-        with kpi2:
-            status_label = "🟢 IN TRADE (LONG)" if metrics["is_in_position"] else "⚪ CASH (WAITING)"
-            st.metric(label="Bot Position Status", value=status_label)
-
-        with kpi3:
-            st.metric(
-                label="Total Strategy PnL",
-                value=f"${metrics['total_pnl']:+,.2f}",
-                delta=f"{metrics['total_return_pct']:+.2f}%"
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key=f"candlestick_chart_{symbol}_{interval}",
+                config={
+                    "scrollZoom": True,
+                    "displayModeBar": True,
+                    "displaylogo": False,
+                    "modeBarButtonsToAdd": ["drawline", "eraseshape"]
+                }
             )
 
-        with kpi4:
-            st.metric(
-                label="Win Rate",
-                value=f"{metrics['win_rate']:.1f}%",
-                delta=f"{metrics['winning_trades']}/{metrics['total_trades']} Won"
-            )
+        except Exception as e:
+            st.error(f"Error streaming candlesticks from Binance: {e}")
 
-        with kpi5:
-            st.metric(
-                label="Max Drawdown",
-                value=f"-{metrics['max_drawdown']:.2f}%",
-                delta=f"Profit Factor: {metrics['profit_factor']:.2f}"
-            )
+    # --- RIGHT COLUMN: MANUAL TRADING CONTROLS (binance_trader actions) ---
+    with col_trade:
+        st.markdown("### 🎮 Manual Execution")
+        st.caption("Executes real demo orders on Binance Spot Testnet via `BinanceTrader`.")
+
+        spend_usdt = st.number_input(
+            "Order Amount (USDT)",
+            min_value=10.0,
+            max_value=10000.0,
+            value=50.0,
+            step=10.0,
+            help="Minimum Binance order size is $10 USDT."
+        )
+
+        approx_qty = round(spend_usdt / current_price, 5) if current_price else 0.0
+        st.info(f"Est. Size: **~{approx_qty:.5f} {asset_sym}**")
 
         st.markdown("---")
 
-        # Interactive Candlestick Chart with Plotly
-        fig = go.Figure()
+        # 1. BUY Action (calls trader.buy)
+        buy_disabled = has_pos
+        if st.button("🟢 BUY (Open Long)", use_container_width=True, disabled=buy_disabled, type="primary"):
+            with st.spinner(f"Placing Testnet BUY for ${spend_usdt:,.2f} USDT..."):
+                res = trader.buy(symbol=symbol, amount_usdt=spend_usdt)
+                if res.get("ok"):
+                    st.success(f"✅ BUY SUCCESS! Order #{res.get('binance_order_id')}")
+                    st.toast(f"Bought {res.get('quantity')} {symbol} @ ${res.get('price'):,.2f}!", icon="🟢")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {res.get('error')}")
 
-        # Candlestick Series
-        fig.add_trace(go.Candlestick(
-            x=df.index,
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name=f"{symbol} Candlesticks",
-            increasing_line_color="#26a69a",
-            decreasing_line_color="#ef5350"
-        ))
+        # 2. BUYCLOSE Action (calls trader.buyclose)
+        close_disabled = not has_pos
+        if st.button("🔴 BUYCLOSE (Close Long)", use_container_width=True, disabled=close_disabled):
+            with st.spinner(f"Closing Long position in {symbol}..."):
+                res = trader.buyclose(symbol=symbol)
+                if res.get("ok"):
+                    pnl_val = res.get('realized_pnl', 0)
+                    pnl_pct_val = res.get('realized_pnl_pct', 0)
+                    st.success(f"✅ Position Closed! Realized PnL: ${pnl_val:+,.2f} ({pnl_pct_val:+.2f}%)")
+                    st.toast(f"Closed @ ${res.get('exit_price'):,.2f} (PnL: ${pnl_val:+,.2f})", icon="🔴")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {res.get('error')}")
 
-        # Fast EMA
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df[f"EMA_{fast_ema}"],
-            mode="lines",
-            name=f"Fast EMA ({fast_ema})",
-            line=dict(color="#00E5FF", width=1.5)
-        ))
+        # Advanced Actions Expander: sell, sellclose, reset
+        with st.expander("🛠️ More Actions (Short / Reset)"):
+            st.caption("Test the other core methods in `binance_trader.py`:")
 
-        # Slow EMA
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df[f"EMA_{slow_ema}"],
-            mode="lines",
-            name=f"Slow EMA ({slow_ema})",
-            line=dict(color="#FF9100", width=1.5)
-        ))
+            if st.button("🔻 SELL (Short Signal / Exit)", use_container_width=True):
+                res = trader.sell(symbol=symbol, amount_usdt=spend_usdt)
+                st.write(res)
+                st.rerun()
 
-        # Buy Signals (Triangles Up)
-        buys = df[df["signal"] == "BUY"]
-        if not buys.empty:
-            fig.add_trace(go.Scatter(
-                x=buys.index,
-                y=buys["signal_price"] * 0.998,
-                mode="markers+text",
-                name="BUY Signal",
-                text="BUY",
-                textposition="bottom center",
-                marker=dict(symbol="triangle-up", size=14, color="#00E676", line=dict(width=1, color="#ffffff"))
-            ))
+            if st.button("🔄 SELLCLOSE (Cover Short)", use_container_width=True):
+                res = trader.sellclose(symbol=symbol)
+                st.write(res)
+                st.rerun()
 
-        # Sell Signals (Triangles Down)
-        sells = df[df["signal"] == "SELL"]
-        if not sells.empty:
-            fig.add_trace(go.Scatter(
-                x=sells.index,
-                y=sells["signal_price"] * 1.002,
-                mode="markers+text",
-                name="SELL Signal",
-                text="SELL",
-                textposition="top center",
-                marker=dict(symbol="triangle-down", size=14, color="#FF1744", line=dict(width=1, color="#ffffff"))
-            ))
+            st.markdown("---")
+            if st.button("⚠️ Reset All Test Trades", use_container_width=True):
+                trader.reset()
+                st.warning("Cleared local test trades and restored wallet balance.")
+                st.rerun()
 
-        fig.update_layout(
-            title=f"{symbol} Real-Time Chart with EMA {fast_ema}/{slow_ema} Crossovers",
-            xaxis_title="Time (UTC)",
-            yaxis_title="Price (USDT)",
-            template="plotly_dark",
-            height=620,
-            margin=dict(l=40, r=40, t=50, b=40),
-            xaxis_rangeslider_visible=False,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
+    # --- BOTTOM SECTION: REAL DATABASE TRADE HISTORY ---
+    st.markdown("---")
+    tab_trades, tab_signals = st.tabs(["📋 Real Testnet Trades (Database)", "📡 Signal Logs"])
 
-        st.plotly_chart(fig, use_container_width=True)
+    with tab_trades:
+        trades_qs = Trade.objects.filter(bot_config_id=trader.bot.id).order_by('-entry_time')[:30]
+        if trades_qs.exists():
+            rows = []
+            for t in trades_qs:
+                rows.append({
+                    "Trade ID": f"#{t.id}",
+                    "Symbol": t.symbol,
+                    "Status": "🟢 OPEN" if t.status == 'OPEN' else "⚪ CLOSED",
+                    "Entry Time": t.entry_time.strftime("%Y-%m-%d %H:%M:%S") if t.entry_time else "-",
+                    "Entry Price": f"${t.entry_price:,.2f}",
+                    "Quantity": f"{t.quantity:.5f}",
+                    "Cost (USDT)": f"${t.cost:,.2f}",
+                    "Exit Price": f"${t.exit_price:,.2f}" if t.exit_price else "-",
+                    "Realized PnL": f"${t.pnl:+,.2f} ({t.pnl_pct:+.2f}%)" if t.pnl is not None else "-",
+                    "Result": "WIN ✅" if t.is_win else ("LOSS ❌" if t.is_win is False else "-"),
+                    "Notes / Order ID": t.notes
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        else:
+            st.info("No recorded trades yet. Click 'BUY' above to place your first Testnet trade!")
 
-        # Analytics & Trade Log Tabs
-        tab1, tab2, tab3 = st.tabs(["📋 Executed Trade History", "📈 Equity Growth Curve", "📊 Raw Binance OHLCV Bars"])
+    with tab_signals:
+        signals_qs = SignalLog.objects.filter(bot_config_id=trader.bot.id).order_by('-timestamp')[:20]
+        if signals_qs.exists():
+            sig_rows = [
+                {
+                    "Time": s.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "Symbol": s.symbol,
+                    "Signal": s.signal_type,
+                    "Price": f"${s.price:,.2f}",
+                    "Executed": "YES ✅" if s.executed else "NO ⚪",
+                    "Message": s.message
+                }
+                for s in signals_qs
+            ]
+            st.dataframe(pd.DataFrame(sig_rows), use_container_width=True)
+        else:
+            st.info("No signal logs recorded yet.")
 
-        with tab1:
-            if metrics["trades"]:
-                trades_df = pd.DataFrame(metrics["trades"])
-                trades_df["entry_time"] = pd.to_datetime(trades_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
-                trades_df["exit_time"] = pd.to_datetime(trades_df["exit_time"]).dt.strftime("%Y-%m-%d %H:%M")
-                trades_df["entry_price"] = trades_df["entry_price"].map("${:,.2f}".format)
-                trades_df["exit_price"] = trades_df["exit_price"].map("${:,.2f}".format)
-                trades_df["pnl"] = trades_df["pnl"].map("${:+,.2f}".format)
-                trades_df["pnl_pct"] = trades_df["pnl_pct"].map("{:+.2f}%".format)
-                trades_df["result"] = trades_df["is_win"].apply(lambda w: "WIN ✅" if w else "LOSS ❌")
-
-                display_cols = ["entry_time", "entry_price", "exit_time", "exit_price", "pnl", "pnl_pct", "result"]
-                st.dataframe(trades_df[display_cols], use_container_width=True)
-            else:
-                st.info("No completed round-trip trades in this timeframe window yet. Try expanding the lookback horizon or shortening the EMA periods.")
-
-        with tab2:
-            equity_df = metrics["equity_df"]
-            if not equity_df.empty:
-                eq_fig = go.Figure()
-                eq_fig.add_trace(go.Scatter(
-                    x=equity_df["datetime"],
-                    y=equity_df["equity"],
-                    mode="lines",
-                    name="Account Equity",
-                    line=dict(color="#00E5FF", width=2)
-                ))
-                eq_fig.add_hline(
-                    y=initial_capital,
-                    line_dash="dash",
-                    line_color="gray",
-                    annotation_text=f"Initial Capital: ${initial_capital:,.2f}"
-                )
-                eq_fig.update_layout(
-                    title="Simulated Account Equity Over Time",
-                    xaxis_title="Time",
-                    yaxis_title="Account Equity (USDT)",
-                    template="plotly_dark",
-                    height=350,
-                    margin=dict(l=40, r=40, t=40, b=40)
-                )
-                st.plotly_chart(eq_fig, use_container_width=True)
-
-        with tab3:
-            st.write(f"Showing latest {len(df)} candles fetched directly from Binance:")
-            st.dataframe(df.tail(50), use_container_width=True)
-
-    except Exception as e:
-        st.error(f"❌ Error fetching or processing Binance data: {e}")
-        st.info("Tip: Check your internet connection or verify the symbol name format (e.g., 'BTCUSDT').")
 
 # Execute the live fragment
-render_live_dashboard()
+render_terminal()

@@ -5,13 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>StockGame - 24/7 Algorithmic Trading Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
         .glass-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; }
+        .form-input { background: #0d1117; border: 1px solid #30363d; color: #f0f6fc; border-radius: 6px; padding: 6px 10px; font-size: 12px; width: 100%; }
+        .form-input:focus { outline: none; border-color: #10b981; }
     </style>
 </head>
 <body class="p-6 md:p-10">
+    {% csrf_token %}
 
     <!-- Top Header -->
     <header class="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-gray-800 gap-4">
@@ -20,10 +24,26 @@
                 <i class="fa-solid fa-robot text-emerald-400"></i> StockGame Algorithmic Engine
             </h1>
             <p class="text-sm text-gray-400 mt-1">
-                Headless Binance EMA Crossover Bot • 24/7 PM2 Daemon Task • Django ORM Persistence
+                Automated Binance EMA Crossover Bot • Variable Fixed-Size Execution • Shared DB with Terminal (8501)
             </p>
         </div>
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3">
+            <span id="auth-badge" class="px-3 py-1.5 text-xs rounded-lg bg-gray-800 text-gray-300 border border-gray-700">
+                Checking Binance...
+            </span>
+            <span id="ws-badge" class="px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>Live Feed (&lt;1s)</span>
+            </span>
+            <div class="flex items-center gap-1 text-xs text-gray-300 bg-gray-800/80 px-2.5 py-1.5 rounded-lg border border-gray-700">
+                <label for="poll-interval-select" class="text-gray-400">Sync:</label>
+                <select id="poll-interval-select" class="bg-transparent text-white font-mono focus:outline-none cursor-pointer">
+                    <option value="1000" selected class="bg-gray-900 text-white">1s (Instant)</option>
+                    <option value="2000" class="bg-gray-900 text-white">2s</option>
+                    <option value="5000" class="bg-gray-900 text-white">5s</option>
+                    <option value="15000" class="bg-gray-900 text-white">15s</option>
+                </select>
+            </div>
             <button onclick="triggerCycle()" id="trigger-btn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-2">
                 <i class="fa-solid fa-play"></i> Trigger Cycle Now
             </button>
@@ -36,72 +56,130 @@
         </div>
     </header>
 
+    <!-- Status Banner -->
+    <div id="status-banner" class="hidden mt-4 p-3 rounded-lg border text-xs font-mono"></div>
+
     <!-- KPI Summary Row -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-6">
         <div class="glass-card p-4">
-            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Active Bots</div>
-            <div class="text-2xl font-black text-white mt-2">{{ bots.count }}</div>
-            <div class="text-xs text-emerald-400 mt-1">Managed via PM2 Daemon</div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Live Price</div>
+            <div id="kpi-live-price" class="text-2xl font-black text-white mt-2">--</div>
+            <div id="kpi-live-symbol" class="text-xs text-cyan-400 mt-1">BTCUSDT</div>
         </div>
         <div class="glass-card p-4">
-            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Total Trades</div>
-            <div class="text-2xl font-black text-white mt-2">{{ total_trades }}</div>
-            <div class="text-xs text-gray-400 mt-1">Completed Roundtrips</div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Wallet / Testnet USDT</div>
+            <div id="kpi-wallet-cash" class="text-2xl font-black text-emerald-400 mt-2">--</div>
+            <div id="kpi-asset-bal" class="text-xs text-gray-400 mt-1">Paper Cash: --</div>
         </div>
         <div class="glass-card p-4">
-            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Win Rate</div>
-            <div class="text-2xl font-black text-white mt-2">{{ win_rate }}%</div>
-            <div class="text-xs text-emerald-400 mt-1">{{ winning_trades }} Wins</div>
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Open Position</div>
+            <div id="kpi-open-pos" class="text-xl font-black text-white mt-2">FLAT</div>
+            <div id="kpi-unrealized" class="text-xs text-gray-400 mt-1">Unrealized: $0.00</div>
+        </div>
+        <div class="glass-card p-4">
+            <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Trades & Win Rate</div>
+            <div id="kpi-win-rate" class="text-2xl font-black text-white mt-2">{{ win_rate }}%</div>
+            <div id="kpi-total-trades" class="text-xs text-emerald-400 mt-1">{{ winning_trades }}/{{ total_trades }} Closed Wins</div>
         </div>
         <div class="glass-card p-4">
             <div class="text-xs uppercase tracking-wider text-gray-400 font-semibold">Net Realized PnL</div>
-            <div class="text-2xl font-black {% if total_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} mt-2">
+            <div id="kpi-total-pnl" class="text-2xl font-black {% if total_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %} mt-2">
                 ${{ total_pnl|floatformat:2 }}
             </div>
-            <div class="text-xs text-gray-400 mt-1">All closed positions</div>
+            <div id="kpi-active-bots" class="text-xs text-gray-400 mt-1">{{ active_bots_count }} / {{ total_bots_count }} Active Bot(s)</div>
         </div>
     </div>
 
-    <!-- Active Bot Configurations -->
+    <!-- Live Candlestick & EMA Chart -->
+    <div class="glass-card p-5 mt-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-chart-candlestick text-cyan-400"></i>
+                <span id="chart-title">TradingView Market Chart & EMA Signals</span>
+            </h2>
+            <div class="flex items-center gap-3">
+                <span id="chart-legend" class="text-xs font-mono text-gray-300 hidden sm:inline"></span>
+                <span id="last-updated-label" class="text-xs text-gray-400 font-mono">Loading chart...</span>
+            </div>
+        </div>
+        <div id="ema-chart" class="w-full h-[450px] rounded-lg overflow-hidden border border-gray-800"></div>
+    </div>
+
+    <!-- Bot Configuration & Variable Order Size Controls -->
     <div class="mt-8">
         <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <i class="fa-solid fa-sliders text-cyan-400"></i> Bot Configurations
+            <i class="fa-solid fa-sliders text-cyan-400"></i> Bot Configuration & Order Size
+            <span id="bots-header-count" class="text-xs font-mono font-normal px-2.5 py-0.5 rounded-full bg-gray-800 text-gray-300 border border-gray-700">
+                {{ active_bots_count }} Active / {{ total_bots_count }} Total
+            </span>
         </h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 gap-4" id="bot-cards-container">
             {% for bot in bots %}
-            <div class="glass-card p-5">
-                <div class="flex justify-between items-center pb-3 border-b border-gray-800">
+            <div class="glass-card p-5" data-bot-id="{{ bot.id }}">
+                <div class="flex flex-col md:flex-row justify-between md:items-center pb-4 border-b border-gray-800 gap-3">
                     <div>
                         <h3 class="font-bold text-white text-base">{{ bot.name }}</h3>
-                        <span class="text-xs font-mono text-cyan-400">{{ bot.symbol }} • {{ bot.interval }}</span>
+                        <span class="text-xs font-mono text-cyan-400" id="bot-subtitle-{{ bot.id }}">
+                            {{ bot.symbol }} • {{ bot.interval }} • {{ bot.mode }} • Order Size: ${{ bot.order_amount_usdt|floatformat:2 }}
+                        </span>
                     </div>
-                    <div>
-                        {% if bot.is_active %}
-                        <span class="px-2.5 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">Active</span>
-                        {% else %}
-                        <span class="px-2.5 py-1 text-xs rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/30">Paused</span>
-                        {% endif %}
+                    <div class="flex items-center gap-2">
+                        <span id="bot-status-badge-{{ bot.id }}" class="px-2.5 py-1 text-xs rounded-full {% if bot.is_active %}bg-emerald-500/10 text-emerald-400 border border-emerald-500/30{% else %}bg-gray-500/10 text-gray-400 border border-gray-500/30{% endif %}">
+                            {% if bot.is_active %}Active{% else %}Paused{% endif %}
+                        </span>
+                        <button onclick="toggleBot({{ bot.id }})" id="bot-toggle-btn-{{ bot.id }}" class="px-3 py-1 text-xs rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">
+                            {% if bot.is_active %}Pause Bot{% else %}Start Bot{% endif %}
+                        </button>
                     </div>
                 </div>
-                <div class="grid grid-cols-3 gap-3 mt-4 text-xs">
+
+                <form onsubmit="saveBotConfig(event, {{ bot.id }})" class="grid grid-cols-2 md:grid-cols-7 gap-3 mt-4 items-end">
                     <div>
-                        <div class="text-gray-400">Strategy</div>
-                        <div class="font-semibold text-white mt-1">EMA {{ bot.fast_ema_period }} / {{ bot.slow_ema_period }}</div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Symbol</label>
+                        <input type="text" id="bot-symbol-{{ bot.id }}" value="{{ bot.symbol }}" class="form-input font-mono uppercase">
                     </div>
                     <div>
-                        <div class="text-gray-400">Current Cash</div>
-                        <div class="font-semibold text-emerald-400 mt-1">${{ bot.current_cash|floatformat:2 }}</div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Interval</label>
+                        <select id="bot-interval-{{ bot.id }}" class="form-input">
+                            {% for val, label in interval_choices %}
+                            <option value="{{ val }}" {% if bot.interval == val %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
                     </div>
                     <div>
-                        <div class="text-gray-400">Last Task Run</div>
-                        <div class="font-semibold text-gray-300 mt-1">
-                            {% if bot.last_run_at %}{{ bot.last_run_at|date:"H:i:s" }} UTC{% else %}Pending{% endif %}
-                        </div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Fast EMA</label>
+                        <input type="number" min="2" max="200" id="bot-fast-{{ bot.id }}" value="{{ bot.fast_ema_period }}" class="form-input font-mono">
                     </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Slow EMA</label>
+                        <input type="number" min="3" max="400" id="bot-slow-{{ bot.id }}" value="{{ bot.slow_ema_period }}" class="form-input font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Order Size (USDT)</label>
+                        <input type="number" min="10" step="1" id="bot-size-{{ bot.id }}" value="{{ bot.order_amount_usdt }}" class="form-input font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Execution Mode</label>
+                        <select id="bot-mode-{{ bot.id }}" class="form-input">
+                            {% for val, label in mode_choices %}
+                            <option value="{{ val }}" {% if bot.mode == val %}selected{% endif %}>{{ val }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <button type="submit" id="bot-save-btn-{{ bot.id }}" class="w-full px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-lg transition-colors">
+                            <i class="fa-solid fa-floppy-disk mr-1"></i> Save Settings
+                        </button>
+                    </div>
+                </form>
+
+                <div class="flex flex-wrap gap-6 mt-4 pt-3 border-t border-gray-800/70 text-xs text-gray-400">
+                    <div>Bot Cash: <span id="bot-cash-{{ bot.id }}" class="text-emerald-400 font-mono font-semibold">${{ bot.current_cash|floatformat:2 }}</span></div>
+                    <div>Last Cycle Run: <span id="bot-lastrun-{{ bot.id }}" class="text-gray-200 font-mono">{% if bot.last_run_at %}{{ bot.last_run_at|date:"Y-m-d H:i:s" }} UTC{% else %}Pending{% endif %}</span></div>
                 </div>
             </div>
             {% empty %}
-            <div class="glass-card p-6 text-center text-gray-400 col-span-2">
+            <div class="glass-card p-6 text-center text-gray-400">
                 No bot configured yet. Trigger a cycle to auto-create the default BTCUSDT bot!
             </div>
             {% endfor %}
@@ -114,29 +192,34 @@
         <div class="glass-card p-5">
             <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
                 <span><i class="fa-solid fa-receipt text-amber-400 mr-2"></i> Recent Executed Trades</span>
-                <span class="text-xs text-gray-400">{{ trades.count }} records</span>
+                <span id="trades-count-label" class="text-xs text-gray-400">{{ total_trades_count }} total</span>
             </h2>
-            <div class="overflow-x-auto">
+            <div class="overflow-x-auto max-h-[380px] overflow-y-auto">
                 <table class="w-full text-xs text-left">
-                    <thead class="text-gray-400 border-b border-gray-800">
+                    <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
                         <tr>
-                            <th class="py-2">Entry</th>
-                            <th class="py-2">Price</th>
-                            <th class="py-2">Exit</th>
-                            <th class="py-2">PnL</th>
-                            <th class="py-2">Status</th>
+                            <th class="py-2 pr-2">ID</th>
+                            <th class="py-2 pr-2">Pair</th>
+                            <th class="py-2 pr-2">Entry</th>
+                            <th class="py-2 pr-2">Qty</th>
+                            <th class="py-2 pr-2">Exit</th>
+                            <th class="py-2 pr-2">PnL</th>
+                            <th class="py-2 pr-2">Status</th>
+                            <th class="py-2">Notes</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-800 font-mono">
+                    <tbody id="trades-tbody" class="divide-y divide-gray-800 font-mono">
                         {% for t in trades %}
                         <tr>
-                            <td class="py-2.5 text-gray-300">{{ t.entry_time|date:"m-d H:i" }}</td>
-                            <td class="py-2.5 text-white">${{ t.entry_price|floatformat:2 }}</td>
-                            <td class="py-2.5 text-gray-300">{% if t.exit_time %}{{ t.exit_time|date:"m-d H:i" }}{% else %}-{% endif %}</td>
-                            <td class="py-2.5 font-bold {% if t.pnl and t.pnl >= 0 %}text-emerald-400{% elif t.pnl %}text-rose-400{% else %}text-gray-400{% endif %}">
-                                {% if t.pnl %}${{ t.pnl|floatformat:2 }}{% else %}-{% endif %}
+                            <td class="py-2.5 pr-2 text-gray-400">#{{ t.id }}</td>
+                            <td class="py-2.5 pr-2 text-cyan-400">{{ t.symbol }}</td>
+                            <td class="py-2.5 pr-2 text-white">${{ t.entry_price|floatformat:2 }}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">{{ t.quantity|floatformat:5 }}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">{% if t.exit_price is not None %}${{ t.exit_price|floatformat:2 }}{% else %}-{% endif %}</td>
+                            <td class="py-2.5 pr-2 font-bold {% if t.pnl is not None and t.pnl >= 0 %}text-emerald-400{% elif t.pnl is not None %}text-rose-400{% else %}text-gray-400{% endif %}">
+                                {% if t.pnl is not None %}${{ t.pnl|floatformat:2 }}{% else %}-{% endif %}
                             </td>
-                            <td class="py-2.5">
+                            <td class="py-2.5 pr-2">
                                 {% if t.status == 'OPEN' %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400">HOLDING</span>
                                 {% elif t.is_win %}
@@ -145,10 +228,11 @@
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400">LOSS</span>
                                 {% endif %}
                             </td>
+                            <td class="py-2.5 text-[11px] text-gray-400 truncate max-w-[180px]" title="{{ t.notes }}">{{ t.notes }}</td>
                         </tr>
                         {% empty %}
                         <tr>
-                            <td colspan="5" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td>
+                            <td colspan="8" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -160,26 +244,26 @@
         <div class="glass-card p-5">
             <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
                 <span><i class="fa-solid fa-satellite-dish text-cyan-400 mr-2"></i> Signal Evaluation Stream</span>
-                <span class="text-xs text-gray-400">{{ signals.count }} logs</span>
+                <span id="signals-count-label" class="text-xs text-gray-400">{{ total_signals_count }} total</span>
             </h2>
             <div class="overflow-x-auto max-h-[380px] overflow-y-auto">
                 <table class="w-full text-xs text-left">
                     <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
                         <tr>
-                            <th class="py-2">Time (UTC)</th>
-                            <th class="py-2">Symbol</th>
-                            <th class="py-2">Price</th>
-                            <th class="py-2">Signal</th>
-                            <th class="py-2">Action</th>
+                            <th class="py-2 pr-2">Time (UTC)</th>
+                            <th class="py-2 pr-2">Symbol</th>
+                            <th class="py-2 pr-2">Price</th>
+                            <th class="py-2 pr-2">Signal</th>
+                            <th class="py-2">Message</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-gray-800 font-mono">
+                    <tbody id="signals-tbody" class="divide-y divide-gray-800 font-mono">
                         {% for s in signals %}
                         <tr>
-                            <td class="py-2 text-gray-400">{{ s.timestamp|date:"m-d H:i" }}</td>
-                            <td class="py-2 text-white">{{ s.symbol }}</td>
-                            <td class="py-2 text-gray-300">${{ s.price|floatformat:2 }}</td>
-                            <td class="py-2">
+                            <td class="py-2 pr-2 text-gray-400">{{ s.timestamp|date:"m-d H:i" }}</td>
+                            <td class="py-2 pr-2 text-white">{{ s.symbol }}</td>
+                            <td class="py-2 pr-2 text-gray-300">${{ s.price|floatformat:2 }}</td>
+                            <td class="py-2 pr-2">
                                 {% if s.signal_type == 'BUY' %}
                                 <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>
                                 {% elif s.signal_type == 'SELL' %}
@@ -188,7 +272,7 @@
                                 <span class="text-gray-500">HOLD</span>
                                 {% endif %}
                             </td>
-                            <td class="py-2 text-[11px] text-gray-400 truncate max-w-[160px]">{{ s.message }}</td>
+                            <td class="py-2 text-[11px] text-gray-400 truncate max-w-[200px]" title="{{ s.message }}">{{ s.message }}</td>
                         </tr>
                         {% empty %}
                         <tr>
@@ -202,19 +286,523 @@
     </div>
 
     <script>
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            return match ? decodeURIComponent(match[2]) : '';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
+
+        function showBanner(msg, type = 'info') {
+            const el = document.getElementById('status-banner');
+            const styles = {
+                success: 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300',
+                error: 'bg-rose-500/10 border-rose-500/40 text-rose-300',
+                info: 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
+            };
+            el.className = `mt-4 p-3 rounded-lg border text-xs font-mono ${styles[type] || styles.info}`;
+            el.textContent = msg;
+            el.classList.remove('hidden');
+        }
+
+        let tvChart = null;
+        let candleSeries = null;
+        let fastEmaSeries = null;
+        let slowEmaSeries = null;
+        let currentChartKey = '';
+        let lastCandle = null;
+
+        function initTradingViewChart() {
+            const container = document.getElementById('ema-chart');
+            if (!container) return;
+            container.innerHTML = '';
+
+            tvChart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 450,
+                layout: {
+                    background: { type: 'solid', color: '#0d1117' },
+                    textColor: '#8b949e',
+                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                },
+                grid: {
+                    vertLines: { color: '#161b22' },
+                    horzLines: { color: '#161b22' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                    vertLine: { color: '#58a6ff', width: 1, style: 3, labelBackgroundColor: '#1f6feb' },
+                    horzLine: { color: '#58a6ff', width: 1, style: 3, labelBackgroundColor: '#1f6feb' },
+                },
+                rightPriceScale: {
+                    borderColor: '#30363d',
+                    textColor: '#c9d1d9',
+                    scaleMargins: { top: 0.1, bottom: 0.15 },
+                },
+                timeScale: {
+                    borderColor: '#30363d',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            candleSeries = tvChart.addCandlestickSeries({
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            });
+
+            fastEmaSeries = tvChart.addLineSeries({
+                color: '#00E5FF',
+                lineWidth: 2,
+                title: 'Fast EMA',
+                priceLineVisible: false,
+            });
+
+            slowEmaSeries = tvChart.addLineSeries({
+                color: '#FF9100',
+                lineWidth: 2,
+                title: 'Slow EMA',
+                priceLineVisible: false,
+            });
+
+            // Dynamic Hover Legend like TradingView
+            tvChart.subscribeCrosshairMove((param) => {
+                const legendEl = document.getElementById('chart-legend');
+                if (!legendEl || !param || !param.time || !param.seriesData) return;
+                const cData = param.seriesData.get(candleSeries);
+                const fData = param.seriesData.get(fastEmaSeries);
+                const sData = param.seriesData.get(slowEmaSeries);
+
+                if (cData) {
+                    const o = cData.open !== undefined ? cData.open.toFixed(2) : '--';
+                    const h = cData.high !== undefined ? cData.high.toFixed(2) : '--';
+                    const l = cData.low !== undefined ? cData.low.toFixed(2) : '--';
+                    const c = cData.close !== undefined ? cData.close.toFixed(2) : '--';
+                    const fEma = fData?.value !== undefined ? fData.value.toFixed(2) : '--';
+                    const sEma = sData?.value !== undefined ? sData.value.toFixed(2) : '--';
+                    legendEl.innerHTML = `O:<span class="text-white">${o}</span> H:<span class="text-white">${h}</span> L:<span class="text-white">${l}</span> C:<span class="text-white">${c}</span> | <span class="text-cyan-400">Fast: ${fEma}</span> | <span class="text-amber-400">Slow: ${sEma}</span>`;
+                }
+            });
+
+            window.addEventListener('resize', () => {
+                if (tvChart && container) {
+                    tvChart.applyOptions({ width: container.clientWidth });
+                }
+            });
+        }
+
+        function renderChart(chart) {
+            if (!chart || !chart.timestamps || chart.timestamps.length === 0) return;
+            document.getElementById('chart-title').textContent =
+                `${chart.symbol} (${chart.interval}) • TradingView Live Canvas • EMA ${chart.fast_period}/${chart.slow_period}`;
+
+            if (!tvChart) {
+                initTradingViewChart();
+            }
+
+            const symKey = `${chart.symbol}_${chart.interval}`;
+            const symbolChanged = (symKey !== currentChartKey);
+            currentChartKey = symKey;
+
+            fastEmaSeries.applyOptions({ title: `EMA ${chart.fast_period}` });
+            slowEmaSeries.applyOptions({ title: `EMA ${chart.slow_period}` });
+
+            // Prepare candles & EMAs with strictly ascending unix timestamps
+            const candleData = [];
+            const fastData = [];
+            const slowData = [];
+            const times = chart.unix_times || chart.timestamps.map(t => Math.floor(Date.parse(t) / 1000));
+
+            for (let i = 0; i < times.length; i++) {
+                const t = times[i];
+                if (i > 0 && t <= times[i - 1]) continue;
+
+                candleData.push({
+                    time: t,
+                    open: chart.open[i],
+                    high: chart.high[i],
+                    low: chart.low[i],
+                    close: chart.close[i]
+                });
+
+                if (chart.fast_ema[i] !== null && !isNaN(chart.fast_ema[i])) {
+                    fastData.push({ time: t, value: chart.fast_ema[i] });
+                }
+                if (chart.slow_ema[i] !== null && !isNaN(chart.slow_ema[i])) {
+                    slowData.push({ time: t, value: chart.slow_ema[i] });
+                }
+            }
+
+            if (candleData.length > 0) {
+                lastCandle = { ...candleData[candleData.length - 1] };
+            }
+
+            candleSeries.setData(candleData);
+            fastEmaSeries.setData(fastData);
+            slowEmaSeries.setData(slowData);
+
+            // Overlay BUY & SELL trade markers on TradingView chart
+            const markers = [];
+            for (const m of (chart.trade_markers || [])) {
+                if (m.entry_time) {
+                    const entrySec = Math.floor(Date.parse(m.entry_time) / 1000);
+                    markers.push({
+                        time: entrySec,
+                        position: 'belowBar',
+                        color: '#00E676',
+                        shape: 'arrowUp',
+                        text: `BUY #${m.id} @ $${m.entry_price.toFixed(0)}`
+                    });
+                }
+                if (m.exit_time && m.exit_price !== null) {
+                    const exitSec = Math.floor(Date.parse(m.exit_time) / 1000);
+                    markers.push({
+                        time: exitSec,
+                        position: 'aboveBar',
+                        color: '#FF1744',
+                        shape: 'arrowDown',
+                        text: `SELL #${m.id} @ $${m.exit_price.toFixed(0)}`
+                    });
+                }
+            }
+
+            // Sort markers chronologically
+            markers.sort((a, b) => a.time - b.time);
+            candleSeries.setMarkers(markers);
+
+            if (symbolChanged) {
+                tvChart.timeScale().fitContent();
+            }
+        }
+
+        function renderTables(data) {
+            document.getElementById('trades-count-label').textContent = `${data.total_trades} total`;
+            document.getElementById('signals-count-label').textContent = `${data.total_signals} total`;
+
+            const tradesBody = document.getElementById('trades-tbody');
+            if (!data.recent_trades || data.recent_trades.length === 0) {
+                tradesBody.innerHTML = '<tr><td colspan="8" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td></tr>';
+            } else {
+                tradesBody.innerHTML = data.recent_trades.map(t => {
+                    const exitStr = t.exit_price !== null ? `$${t.exit_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : '-';
+                    const pnlStr = t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-';
+                    const pnlCls = t.pnl === null ? 'text-gray-400' : (t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
+                    let badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400">LOSS</span>';
+                    if (t.status === 'OPEN') badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400">HOLDING</span>';
+                    else if (t.is_win) badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400">WIN</span>';
+                    return `<tr>
+                        <td class="py-2.5 pr-2 text-gray-400">#${t.id}</td>
+                        <td class="py-2.5 pr-2 text-cyan-400">${escapeHtml(t.symbol)}</td>
+                        <td class="py-2.5 pr-2 text-white">$${t.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td class="py-2.5 pr-2 text-gray-300">${t.quantity.toFixed(5)}</td>
+                        <td class="py-2.5 pr-2 text-gray-300">${exitStr}</td>
+                        <td class="py-2.5 pr-2 font-bold ${pnlCls}">${pnlStr}</td>
+                        <td class="py-2.5 pr-2">${badge}</td>
+                        <td class="py-2.5 text-[11px] text-gray-400 truncate max-w-[180px]" title="${escapeHtml(t.notes)}">${escapeHtml(t.notes)}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            const sigBody = document.getElementById('signals-tbody');
+            if (!data.recent_signals || data.recent_signals.length === 0) {
+                sigBody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500">No signals evaluated yet.</td></tr>';
+            } else {
+                sigBody.innerHTML = data.recent_signals.map(s => {
+                    let sigBadge = '<span class="text-gray-500">HOLD</span>';
+                    if (s.signal === 'BUY') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>';
+                    else if (s.signal === 'SELL') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-bold">SELL</span>';
+                    return `<tr>
+                        <td class="py-2 pr-2 text-gray-400">${escapeHtml(s.timestamp.slice(5, 16))}</td>
+                        <td class="py-2 pr-2 text-white">${escapeHtml(s.symbol)}</td>
+                        <td class="py-2 pr-2 text-gray-300">$${s.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td class="py-2 pr-2">${sigBadge}</td>
+                        <td class="py-2 text-[11px] text-gray-400 truncate max-w-[200px]" title="${escapeHtml(s.message)}">${escapeHtml(s.message)}</td>
+                    </tr>`;
+                }).join('');
+            }
+        }
+
+        let binanceWs = null;
+        let currentWsSymbol = '';
+        let activePositionCache = null;
+        let pollTimer = null;
+        let pollCycleCounter = 0;
+
+        function connectBinanceWs(symbol) {
+            const sym = (symbol || 'BTCUSDT').toUpperCase();
+            if (sym === currentWsSymbol && binanceWs && binanceWs.readyState === WebSocket.OPEN) {
+                return;
+            }
+            if (binanceWs) {
+                try { binanceWs.close(); } catch(e) {}
+            }
+            currentWsSymbol = sym;
+            const wsPair = sym.toLowerCase();
+            const wsUrl = `wss://stream.binance.com:9443/ws/${wsPair}@ticker`;
+
+            try {
+                binanceWs = new WebSocket(wsUrl);
+                binanceWs.onopen = () => {
+                    const wsBadge = document.getElementById('ws-badge');
+                    if (wsBadge) {
+                        wsBadge.className = 'px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5';
+                        wsBadge.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span>Live Tick (&lt;1s)</span>';
+                    }
+                };
+                binanceWs.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+                    const price = parseFloat(msg.c);
+                    if (!price) return;
+
+                    const priceEl = document.getElementById('kpi-live-price');
+                    if (priceEl) {
+                        const prevPrice = parseFloat(priceEl.dataset.rawPrice || 0);
+                        priceEl.dataset.rawPrice = price;
+                        priceEl.textContent = `$${price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                        if (prevPrice > 0) {
+                            if (price > prevPrice) priceEl.style.color = '#34d399';
+                            else if (price < prevPrice) priceEl.style.color = '#f87171';
+                        }
+                    }
+
+                    // Instant sub-second floating PnL if holding an open position
+                    if (activePositionCache && activePositionCache.quantity && activePositionCache.cost) {
+                        const curVal = activePositionCache.quantity * price;
+                        const pnl = curVal - activePositionCache.cost;
+                        const pnlPct = (pnl / activePositionCache.cost) * 100.0;
+                        const unEl = document.getElementById('kpi-unrealized');
+                        if (unEl) {
+                            unEl.textContent = `Unrealized: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`;
+                            unEl.className = `text-xs mt-1 font-semibold ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                        }
+                    }
+
+                    // Live Candlestick update on TradingView canvas
+                    if (candleSeries && lastCandle) {
+                        lastCandle.close = price;
+                        lastCandle.high = Math.max(lastCandle.high, price);
+                        lastCandle.low = Math.min(lastCandle.low, price);
+                        candleSeries.update(lastCandle);
+                    }
+                };
+                binanceWs.onerror = () => {
+                    const wsBadge = document.getElementById('ws-badge');
+                    if (wsBadge) wsBadge.className = 'hidden';
+                };
+                binanceWs.onclose = () => {
+                    // Auto-reconnect after 3s if disconnected
+                    setTimeout(() => connectBinanceWs(currentWsSymbol), 3000);
+                };
+            } catch(e) {
+                console.warn('WebSocket init error:', e);
+            }
+        }
+
+        async function refreshStatus(fetchChart = true) {
+            try {
+                const url = fetchChart ? '/api/status/?chart=1' : '/api/status/?chart=0';
+                const res = await fetch(url);
+                const data = await res.json();
+                if (!data.ok) return;
+
+                const authEl = document.getElementById('auth-badge');
+                if (data.binance_authenticated) {
+                    authEl.className = 'px-3 py-1.5 text-xs rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                    authEl.textContent = data.binance_testnet ? 'Binance Spot Testnet Connected' : 'Binance Live Connected';
+                } else {
+                    authEl.className = 'px-3 py-1.5 text-xs rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/30';
+                    authEl.textContent = 'Public Data / Paper Only';
+                }
+
+                const kpis = data.kpis;
+                document.getElementById('kpi-win-rate').textContent = `${kpis.win_rate}%`;
+                document.getElementById('kpi-total-trades').textContent = `${kpis.winning_trades}/${kpis.total_trades} Closed Wins`;
+                const pnlEl = document.getElementById('kpi-total-pnl');
+                pnlEl.textContent = `$${kpis.total_pnl.toFixed(2)}`;
+                pnlEl.className = `text-2xl font-black mt-2 ${kpis.total_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                document.getElementById('kpi-active-bots').textContent = `${kpis.active_bots} / ${kpis.total_bots} Active Bot(s)`;
+                const botsHeaderCountEl = document.getElementById('bots-header-count');
+                if (botsHeaderCountEl) {
+                    botsHeaderCountEl.textContent = `${kpis.active_bots} Active / ${kpis.total_bots} Total`;
+                }
+
+                if (data.bots && data.bots.length > 0) {
+                    const primary = data.bots.find(b => b.is_active) || data.bots[0];
+                    if (primary.symbol !== currentWsSymbol) {
+                        connectBinanceWs(primary.symbol);
+                    }
+
+                    // Only set price from REST if WebSocket hasn't ticked yet
+                    const priceEl = document.getElementById('kpi-live-price');
+                    if (priceEl && !priceEl.dataset.rawPrice && primary.live_price !== null) {
+                        priceEl.textContent = `$${primary.live_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                        priceEl.dataset.rawPrice = primary.live_price;
+                    }
+                    document.getElementById('kpi-live-symbol').textContent = `${primary.symbol} (${primary.mode})`;
+
+                    const usdtVal = primary.real_usdt_balance !== null ? primary.real_usdt_balance : primary.current_cash;
+                    document.getElementById('kpi-wallet-cash').textContent = `$${usdtVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                    const assetSym = primary.symbol.replace('USDT', '');
+                    const assetStr = primary.real_asset_balance !== null ? `${primary.real_asset_balance.toFixed(5)} ${assetSym}` : `Paper: $${primary.current_cash.toFixed(2)}`;
+                    document.getElementById('kpi-asset-bal').textContent = assetStr;
+
+                    if (primary.has_open_position && primary.open_position) {
+                        activePositionCache = primary.open_position;
+                        const op = primary.open_position;
+                        document.getElementById('kpi-open-pos').textContent = `LONG ${op.quantity.toFixed(5)} ${assetSym}`;
+                        const unEl = document.getElementById('kpi-unrealized');
+                        unEl.textContent = `Unrealized: ${op.unrealized_pnl >= 0 ? '+' : ''}$${op.unrealized_pnl.toFixed(2)} (${op.unrealized_pnl_pct >= 0 ? '+' : ''}${op.unrealized_pnl_pct.toFixed(2)}%)`;
+                        unEl.className = `text-xs mt-1 ${op.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    } else {
+                        activePositionCache = null;
+                        document.getElementById('kpi-open-pos').textContent = 'FLAT';
+                        const unEl = document.getElementById('kpi-unrealized');
+                        unEl.textContent = `Next Order: $${primary.order_amount_usdt.toFixed(2)}`;
+                        unEl.className = 'text-xs text-gray-400 mt-1';
+                    }
+
+                    for (const b of data.bots) {
+                        const sub = document.getElementById(`bot-subtitle-${b.id}`);
+                        if (sub) sub.textContent = `${b.symbol} • ${b.interval} • ${b.mode} • Order Size: $${b.order_amount_usdt.toFixed(2)}`;
+                        const cashEl = document.getElementById(`bot-cash-${b.id}`);
+                        if (cashEl) cashEl.textContent = `$${b.current_cash.toFixed(2)}`;
+                        const lastEl = document.getElementById(`bot-lastrun-${b.id}`);
+                        if (lastEl && b.last_run_at) lastEl.textContent = b.last_run_at.replace('T', ' ').slice(0, 19) + ' UTC';
+                    }
+                }
+
+                renderTables(data);
+                if (data.chart) renderChart(data.chart);
+                document.getElementById('last-updated-label').textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+                if (data.market_error) {
+                    showBanner(`Binance warning: ${data.market_error}`, 'error');
+                }
+            } catch (err) {
+                showBanner(`Status refresh failed: ${err}`, 'error');
+            }
+        }
+
         async function triggerCycle() {
             const btn = document.getElementById('trigger-btn');
+            btn.disabled = true;
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Running...';
             try {
-                const res = await fetch('/api/trigger-cycle/');
+                const res = await fetch('/api/trigger-cycle/', {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCookie('csrftoken') }
+                });
                 const data = await res.json();
-                window.location.reload();
+                if (!data.ok) {
+                    const errMsg = data.error || (data.results && data.results.map(r => r.error || r.message).join(' | ')) || 'Cycle failed.';
+                    showBanner(errMsg, 'error');
+                } else {
+                    const results = data.results || [];
+                    const summary = results.map(r => `[${r.bot} | ${r.mode || ''}] Signal=${r.signal} — ${r.message}`).join(' | ');
+                    showBanner(
+                        results.length === 0 ? 'No active bots running (all bots are paused).' : (summary || 'Cycle completed.'),
+                        results.length === 0 ? 'info' : 'success'
+                    );
+                }
+                await refreshStatus(true);
             } catch (err) {
-                alert('Cycle trigger error: ' + err);
+                showBanner(`Cycle trigger error: ${err}`, 'error');
+            } finally {
+                btn.disabled = false;
                 btn.innerHTML = '<i class="fa-solid fa-play"></i> Trigger Cycle Now';
             }
         }
-    </script>
 
+        async function saveBotConfig(event, botId) {
+            event.preventDefault();
+            const btn = document.getElementById(`bot-save-btn-${botId}`);
+            btn.disabled = true;
+            const payload = {
+                symbol: document.getElementById(`bot-symbol-${botId}`).value,
+                interval: document.getElementById(`bot-interval-${botId}`).value,
+                fast_ema_period: document.getElementById(`bot-fast-${botId}`).value,
+                slow_ema_period: document.getElementById(`bot-slow-${botId}`).value,
+                order_amount_usdt: document.getElementById(`bot-size-${botId}`).value,
+                mode: document.getElementById(`bot-mode-${botId}`).value
+            };
+            try {
+                const res = await fetch(`/api/bot/${botId}/update/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    showBanner(data.error || 'Failed to update bot config.', 'error');
+                } else {
+                    showBanner(`Saved settings: ${data.bot.symbol} ${data.bot.interval} | EMA ${data.bot.fast_ema}/${data.bot.slow_ema} | Size $${data.bot.order_amount_usdt.toFixed(2)} | Mode: ${data.bot.mode}`, 'success');
+                    connectBinanceWs(data.bot.symbol);
+                    await refreshStatus(true);
+                }
+            } catch (err) {
+                showBanner(`Save error: ${err}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function toggleBot(botId) {
+            try {
+                const res = await fetch(`/api/bot/${botId}/toggle/`, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCookie('csrftoken') }
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    const badge = document.getElementById(`bot-status-badge-${botId}`);
+                    const btn = document.getElementById(`bot-toggle-btn-${botId}`);
+                    if (data.is_active) {
+                        badge.className = 'px-2.5 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                        badge.textContent = 'Active';
+                        btn.textContent = 'Pause Bot';
+                    } else {
+                        badge.className = 'px-2.5 py-1 text-xs rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/30';
+                        badge.textContent = 'Paused';
+                        btn.textContent = 'Start Bot';
+                    }
+                    showBanner(`Bot #${botId} is now ${data.is_active ? 'Active' : 'Paused'}.`, 'info');
+                    await refreshStatus(false);
+                }
+            } catch (err) {
+                showBanner(`Toggle error: ${err}`, 'error');
+            }
+        }
+
+        function schedulePolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            const intervalMs = parseInt(document.getElementById('poll-interval-select').value) || 1000;
+            pollTimer = setInterval(async () => {
+                pollCycleCounter++;
+                // Refresh chart every 5th tick to save bandwidth, fast status poll on every tick
+                const shouldFetchChart = (pollCycleCounter % 5 === 0);
+                await refreshStatus(shouldFetchChart);
+            }, intervalMs);
+        }
+
+        document.getElementById('poll-interval-select').addEventListener('change', () => {
+            pollCycleCounter = 0;
+            schedulePolling();
+            refreshStatus(true);
+        });
+
+        // Initial launch
+        refreshStatus(true);
+        connectBinanceWs('BTCUSDT');
+        schedulePolling();
+    </script>
 </body>
 </html>

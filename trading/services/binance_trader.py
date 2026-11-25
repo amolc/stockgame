@@ -31,12 +31,20 @@ class BinanceTrader:
         self.api_secret = os.getenv("BINANCE_API_SECRET", "")
         self.testnet = os.getenv("BINANCE_TESTNET", "false").lower() in ("true", "1", "yes")
 
-        # Initialize Binance Client
+        if self.testnet:
+            Client.API_URL = Client.API_TESTNET_URL
+
+        # Initialize Binance Client with resilient timeout for network latency
         self.client = Client(
             api_key=self.api_key,
             api_secret=self.api_secret,
-            testnet=self.testnet
+            testnet=self.testnet,
+            ping=False,
+            requests_params={"timeout": 25}
         )
+
+        if self.testnet:
+            self.client.API_URL = self.client.API_TESTNET_URL
 
         # Attach BotConfig (defaults to first active bot in DB)
         self.bot = bot_config or BotConfig.objects.filter(is_active=True).first()
@@ -176,6 +184,11 @@ class BinanceTrader:
                 quantity=float(quantity)
             )
             binance_order_id = res.get("orderId")
+            if "executedQty" in res and float(res["executedQty"]) > 0:
+                quantity = Decimal(str(res["executedQty"]))
+            if "cummulativeQuoteQty" in res and float(res["cummulativeQuoteQty"]) > 0:
+                spend = Decimal(str(res["cummulativeQuoteQty"]))
+                price = spend / quantity
 
         # Record in Django Database
         trade = Trade.objects.create(
@@ -243,6 +256,13 @@ class BinanceTrader:
                 quantity=float(qty)
             )
             binance_order_id = res.get("orderId")
+            if "executedQty" in res and float(res["executedQty"]) > 0:
+                qty = Decimal(str(res["executedQty"]))
+            if "cummulativeQuoteQty" in res and float(res["cummulativeQuoteQty"]) > 0:
+                net_rev = Decimal(str(res["cummulativeQuoteQty"]))
+                price = net_rev / qty
+                pnl = net_rev - open_trade.cost
+                pnl_pct = (pnl / open_trade.cost) * Decimal("100.0")
 
         # Mark trade as CLOSED in Django DB
         open_trade.status = 'CLOSED'
@@ -304,6 +324,7 @@ class BinanceTrader:
         }
 
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     # 6. SELLCLOSE: Close SHORT position (Buy back to cover)
     # -------------------------------------------------------------------------
     def sellclose(self, symbol: Optional[str] = None) -> Dict[str, Any]:
@@ -312,3 +333,13 @@ class BinanceTrader:
             "action": "SELLCLOSE",
             "message": "Covered short position back to cash."
         }
+
+    # -------------------------------------------------------------------------
+    # 7. RESET: Clear trades and restore wallet for testing
+    # -------------------------------------------------------------------------
+    def reset(self) -> Dict[str, Any]:
+        Trade.objects.filter(bot_config=self.bot).delete()
+        SignalLog.objects.filter(bot_config=self.bot).delete()
+        self.bot.current_cash = self.bot.initial_capital
+        self.bot.save(update_fields=['current_cash', 'updated_at'])
+        return {"ok": True, "cash": float(self.bot.current_cash)}

@@ -36,7 +36,7 @@ def run_trading_cycle_for_bot(bot: BotConfig) -> dict:
     )
 
     # 3. Process execution and save trade
-    exec_result = ExecutionService.process_signal(bot, signal_data)
+    exec_result = ExecutionService.process_signal(bot, signal_data, binance=binance)
 
     # 4. Update last run timestamp
     bot.last_run_at = timezone.now()
@@ -44,11 +44,13 @@ def run_trading_cycle_for_bot(bot: BotConfig) -> dict:
 
     return {
         "bot": bot.name,
+        "mode": bot.mode,
         "symbol": bot.symbol,
         "interval": bot.interval,
         "latest_price": signal_data.get("active_price"),
         "signal": signal_data.get("signal"),
         "executed": exec_result.get("executed"),
+        "duplicate": exec_result.get("duplicate", False),
         "message": exec_result.get("message")
     }
 
@@ -57,9 +59,8 @@ def run_all_active_bots():
     """
     Finds all active bots in the database and runs a trading cycle for each.
     """
-    active_bots = BotConfig.objects.filter(is_active=True)
-    if not active_bots.exists():
-        # Create a default bot if none exists
+    if not BotConfig.objects.exists():
+        # Create a default bot only when no bots exist in the database at all
         default_bot = BotConfig.objects.create(
             name="BTCUSDT Default EMA Bot",
             symbol="BTCUSDT",
@@ -71,6 +72,8 @@ def run_all_active_bots():
             is_active=True
         )
         active_bots = [default_bot]
+    else:
+        active_bots = BotConfig.objects.filter(is_active=True).order_by('id')
 
     results = []
     for bot in active_bots:
