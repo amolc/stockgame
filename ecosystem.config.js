@@ -1,7 +1,7 @@
 /**
  * PM2 Process Manager Configuration for StockGame
  *
- * - `stockgame`     : web app via runstockgame.sh (migrations + Django on 127.0.0.1:12500)
+ * - `stockgame`     : web app via runstockgame.sh (migrations + Django on 127.0.0.1:15500)
  * - `stockgame-bot` : trading daemon via runbot.sh (manage.py run_bot)
  *
  * Usage:

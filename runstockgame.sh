@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 HOST="127.0.0.1"
-PORT="12500"
+PORT="15500"
 
 VENV_DIR=""
 for candidate in venv .venv; do
