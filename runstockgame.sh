@@ -47,3 +47,5 @@ python manage.py migrate --noinput
 
 echo "Starting StockGame on http://$HOST:$PORT ..."
 exec python manage.py runserver "$HOST:$PORT"
+
+# this is a test
