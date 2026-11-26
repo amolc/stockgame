@@ -64,9 +64,15 @@ class Trade(models.Model):
         ('CLOSED', 'Closed'),
     )
 
+    SIDE_CHOICES = (
+        ('LONG', 'Long'),
+        ('SHORT', 'Short'),
+    )
+
     bot_config = models.ForeignKey(BotConfig, on_delete=models.CASCADE, related_name='trades')
     symbol = models.CharField(max_length=20)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='OPEN')
+    side = models.CharField(max_length=5, choices=SIDE_CHOICES, default='LONG')
     
     entry_time = models.DateTimeField(default=timezone.now)
     entry_price = models.DecimalField(max_digits=16, decimal_places=4)
@@ -85,7 +91,7 @@ class Trade(models.Model):
 
     def __str__(self):
         pnl_str = f" | PnL: ${self.pnl:.2f}" if self.pnl is not None else ""
-        return f"{self.symbol} {self.status} (Entry: ${self.entry_price:.2f}{pnl_str})"
+        return f"{self.symbol} {self.side} {self.status} (Entry: ${self.entry_price:.2f}{pnl_str})"
 
     class Meta:
         ordering = ['-entry_time']

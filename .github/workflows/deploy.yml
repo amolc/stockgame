@@ -1,0 +1,67 @@
+name: Deploy Stockgame to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys touch the same checkout at once. Newer runs queue
+# behind the in-flight one instead of cancelling it, so a deploy is never left
+# half-applied.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          HOSTNAME: stockgame.80startups.com
+          USER_NAME: ubuntu
+          TARGET_DIR: /home/ubuntu/stockgame
+        run: |
+          set -euo pipefail
+
+          if [ -z "$PRIVATE_KEY" ]; then
+            echo "Error: SSH_PRIVATE_KEY secret is not set in GitHub Secrets." >&2
+            exit 1
+          fi
+
+          echo "$PRIVATE_KEY" > private_key && chmod 600 private_key
+          # The runner is ephemeral, but never leave a private key on disk.
+          trap 'rm -f private_key' EXIT
+
+          ssh -i private_key \
+              -o StrictHostKeyChecking=no \
+              -o IdentitiesOnly=yes \
+              "${USER_NAME}@${HOSTNAME}" \
+              "TARGET_DIR='${TARGET_DIR}' bash -s" <<'EOF'
+          set -euo pipefail
+          cd "$TARGET_DIR"
+
+          echo "Fetching latest main..."
+          git fetch origin main
+          # Keep any uncommitted server-side edits out of the way rather than
+          # blowing them away; they can be recovered with `git stash list`.
+          git stash --include-untracked || true
+          git pull --ff-only origin main
+
+          echo "Installing Python dependencies..."
+          source .venv/bin/activate
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements.txt
+
+          echo "Running database migrations & collecting static files..."
+          python manage.py migrate --noinput
+          python manage.py collectstatic --noinput
+
+         
+
+          echo "Restarting services with PM2..."
+          pm2 restart stockgame
+          
+          echo "Deployment completed successfully!"
+          EOF

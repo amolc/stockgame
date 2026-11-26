@@ -1,7 +1,7 @@
 # StockGame - 24/7 Binance Algorithmic Trading Platform
 
 A production-grade algorithmic trading platform built with **Django**, **Binance REST API**, **Plotly**, and **PM2**.
-Features automated background trading tasks, EMA 20/50 crossover detection, database persistence, and an interactive web dashboard.
+Features automated background trading tasks, EMA 20/50 crossover detection with long/short reversal, database persistence, and an interactive web dashboard.
 
 ---
 
@@ -79,12 +79,17 @@ pm2 stop all
 
 ## 🔑 Plug-and-Play API Keys (Optional)
 The system runs in **Free Public Mode** by default (pulls real Binance data, executes paper trades).  
-To enable Binance Spot Testnet or Live Order execution:
+To enable Binance **USDⓈ-M Futures** execution (Demo Trading, Testnet, or Live):
 1. Copy `.env.example` to `.env`
 2. Add your keys:
    ```env
    BINANCE_API_KEY=your_key
    BINANCE_API_SECRET=your_secret
-   BINANCE_TESTNET=true
+   BINANCE_DEMO=true            # keys from demo.binance.com
+   BINANCE_MARKET=futures       # futures | spot
+   BINANCE_FUTURES_LEVERAGE=5
+   # For testnet.binancefuture.com instead of demo:
+   # BINANCE_DEMO=false
+   # BINANCE_TESTNET=true
    ```
-The bot will automatically switch to **Authenticated Mode**.
+   The bot will automatically switch to **Authenticated Mode** and trade USDⓈ-M Futures with the configured leverage.

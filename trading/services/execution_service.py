@@ -7,8 +7,141 @@ from trading.services.binance_service import BinanceService
 
 
 class ExecutionService:
+    """
+    Executes EMA-crossover signals as long/short futures positions.
+
+    - BUY  (golden cross): close any SHORT, then open LONG.
+    - SELL (death cross) : close any LONG, then open SHORT.
+    Repeated polls on the same closed candle are ignored.
+    """
+
     @staticmethod
+    def _open_position(
+        bot_config: BotConfig,
+        binance: Optional[BinanceService],
+        side: str,
+        price: Decimal,
+        quantity: Decimal,
+        spend: Decimal,
+        candle_time,
+    ) -> tuple[bool, str]:
+        is_live = bot_config.mode == "LIVE"
+        order_side = Client.SIDE_BUY if side == "LONG" else Client.SIDE_SELL
+        binance_order_id = None
+
+        if is_live:
+            if binance is None:
+                binance = BinanceService()
+            if not binance.is_authenticated:
+                return False, f"{side} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
+
+            binance.set_leverage(bot_config.symbol)
+            quantity = binance.round_quantity(bot_config.symbol, quantity)
+            if quantity <= 0:
+                return False, f"{side} signal ignored: Rounded order quantity is 0 for ${spend:.2f} {bot_config.symbol}."
+
+            res = binance.place_market_order(bot_config.symbol, order_side, quantity)
+            binance_order_id = res.get("orderId")
+            if res.get("executedQty") and float(res["executedQty"]) > 0:
+                quantity = Decimal(str(res["executedQty"]))
+            if res.get("cummulativeQuoteQty") and float(res["cummulativeQuoteQty"]) > 0:
+                spend = Decimal(str(res["cummulativeQuoteQty"]))
+                price = spend / quantity if quantity else price
+
+        mode_tag = f"Binance #{binance_order_id}" if binance_order_id else "Paper"
+        with transaction.atomic():
+            Trade.objects.create(
+                bot_config=bot_config,
+                symbol=bot_config.symbol,
+                status='OPEN',
+                side=side,
+                entry_time=candle_time,
+                entry_price=price,
+                quantity=quantity,
+                cost=spend,
+                notes=(
+                    f"Auto {side} BUY ({mode_tag}) EMA "
+                    f"{bot_config.fast_ema_period}>{bot_config.slow_ema_period}"
+                ),
+            )
+            bot_config.current_cash -= spend
+            bot_config.save(update_fields=['current_cash', 'updated_at'])
+
+        return True, (
+            f"Executed {bot_config.mode} {side} OPEN: {quantity:.6f} {bot_config.symbol} "
+            f"@ ${price:,.2f} (Cost: ${spend:,.2f})"
+        )
+
+    @staticmethod
+    def _close_position(
+        bot_config: BotConfig,
+        open_trade: Trade,
+        binance: Optional[BinanceService],
+        candle_time,
+        price: Decimal,
+    ) -> tuple[bool, str]:
+        is_live = bot_config.mode == "LIVE"
+        fee_pct = bot_config.fee_pct
+        qty = open_trade.quantity
+        entry_price = open_trade.entry_price
+        cost = open_trade.cost
+        is_long = open_trade.side == "LONG"
+
+        exit_price = price
+        binance_order_id = None
+
+        if is_live:
+            if binance is None:
+                binance = BinanceService()
+            if not binance.is_authenticated:
+                return False, "SELL signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
+
+            close_side = Client.SIDE_SELL if is_long else Client.SIDE_BUY
+            close_qty = binance.round_quantity(bot_config.symbol, qty)
+            res = binance.place_market_order(
+                bot_config.symbol, close_side, close_qty, reduce_only=True
+            )
+            binance_order_id = res.get("orderId")
+            if res.get("executedQty") and float(res["executedQty"]) > 0:
+                qty = Decimal(str(res["executedQty"]))
+            if res.get("cummulativeQuoteQty") and float(res["cummulativeQuoteQty"]) > 0:
+                quote_qty = Decimal(str(res["cummulativeQuoteQty"]))
+                exit_price = quote_qty / qty if qty else exit_price
+
+        entry_fee = cost * fee_pct
+        exit_fee = qty * exit_price * fee_pct
+        if is_long:
+            net_revenue = qty * exit_price - exit_fee
+            pnl = net_revenue - cost
+        else:
+            pnl = (entry_price - exit_price) * qty - entry_fee - exit_fee
+            net_revenue = cost + pnl
+
+        pnl_pct = (pnl / cost) * Decimal("100.0") if cost else Decimal("0.00")
+        mode_tag = f"Binance #{binance_order_id}" if binance_order_id else "Paper"
+
+        with transaction.atomic():
+            open_trade.status = 'CLOSED'
+            open_trade.exit_time = candle_time
+            open_trade.exit_price = exit_price
+            open_trade.net_revenue = net_revenue
+            open_trade.pnl = pnl
+            open_trade.pnl_pct = pnl_pct
+            open_trade.is_win = pnl > 0
+            open_trade.notes += f" | Auto {open_trade.side} CLOSE ({mode_tag} @ ${exit_price:,.2f})"
+            open_trade.save()
+
+            bot_config.current_cash += net_revenue
+            bot_config.save(update_fields=['current_cash', 'updated_at'])
+
+        return True, (
+            f"Executed {bot_config.mode} {open_trade.side} CLOSE @ ${exit_price:,.2f} | "
+            f"Net PnL: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+        )
+
+    @classmethod
     def process_signal(
+        cls,
         bot_config: BotConfig,
         signal_data: dict,
         binance: Optional[BinanceService] = None,
@@ -41,119 +174,62 @@ class ExecutionService:
                 "current_cash": float(bot_config.current_cash),
             }
 
-        executed = False
-        message = ""
         is_live = bot_config.mode == "LIVE"
         if is_live and binance is None:
             binance = BinanceService()
 
-        # Check existing open trade for this bot
         open_trade = Trade.objects.filter(bot_config=bot_config, status='OPEN').first()
 
-        if signal_type == "BUY":
-            configured_size = bot_config.order_amount_usdt
-            spend = min(configured_size, bot_config.current_cash) if configured_size > 0 else bot_config.current_cash
+        executed = False
+        messages = []
 
-            if open_trade is not None:
-                message = f"BUY signal ignored: Already holding an open position from {open_trade.entry_time}"
-            elif spend < Decimal("10.00"):
-                message = (
-                    f"BUY signal ignored: Order size (${spend:.2f}) is below minimum $10.00 USDT "
-                    f"(Available cash: ${bot_config.current_cash:.2f})"
+        if signal_type in ("BUY", "SELL"):
+            target_side = "LONG" if signal_type == "BUY" else "SHORT"
+
+            if open_trade is not None and open_trade.side == target_side:
+                messages.append(
+                    f"{signal_type} signal ignored: Already holding an open {target_side} "
+                    f"position from {open_trade.entry_time}."
                 )
-            elif is_live and not binance.is_authenticated:
-                message = "BUY signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
             else:
-                fee = spend * fee_pct
-                investable = spend - fee
-                raw_qty = investable / price
-                binance_order_id = None
-
-                if is_live:
-                    quantity = binance.round_quantity(bot_config.symbol, raw_qty)
-                    if quantity <= 0:
-                        message = f"BUY signal ignored: Rounded order quantity is 0 for ${spend:.2f} {bot_config.symbol}."
-                    else:
-                        res = binance.place_market_order(bot_config.symbol, Client.SIDE_BUY, quantity)
-                        binance_order_id = res.get("orderId")
-                        if res.get("executedQty") and float(res["executedQty"]) > 0:
-                            quantity = Decimal(str(res["executedQty"]))
-                        if res.get("cummulativeQuoteQty") and float(res["cummulativeQuoteQty"]) > 0:
-                            spend = Decimal(str(res["cummulativeQuoteQty"]))
-                            price = spend / quantity
-                else:
-                    quantity = raw_qty
-
-                if not message:
-                    mode_tag = f"Binance #{binance_order_id}" if binance_order_id else "Paper"
-                    with transaction.atomic():
-                        Trade.objects.create(
-                            bot_config=bot_config,
-                            symbol=bot_config.symbol,
-                            status='OPEN',
-                            entry_time=candle_time,
-                            entry_price=price,
-                            quantity=quantity,
-                            cost=spend,
-                            notes=f"Auto BUY ({mode_tag}) EMA {bot_config.fast_ema_period}>{bot_config.slow_ema_period}",
-                        )
-                        bot_config.current_cash -= spend
-                        bot_config.save(update_fields=['current_cash', 'updated_at'])
-                    executed = True
-                    message = (
-                        f"Executed {bot_config.mode} BUY: {quantity:.6f} {bot_config.symbol} @ ${price:,.2f} "
-                        f"(Cost: ${spend:,.2f})"
+                if open_trade is not None:
+                    closed, close_msg = cls._close_position(
+                        bot_config, open_trade, binance, candle_time, price
                     )
+                    messages.append(close_msg)
+                    executed = closed
+                    if not closed:
+                        messages.append(f"{signal_type} aborted: Could not close existing {open_trade.side}.")
+                        target_side = None
 
-        elif signal_type == "SELL":
-            if open_trade is None:
-                message = "SELL signal ignored: No open position currently held."
-            elif is_live and not binance.is_authenticated:
-                message = "SELL signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
-            else:
-                qty = open_trade.quantity
-                gross_revenue = qty * price
-                exit_fee = gross_revenue * fee_pct
-                net_revenue = gross_revenue - exit_fee
-                exit_price = price
-                binance_order_id = None
-
-                if is_live:
-                    sell_qty = binance.round_quantity(bot_config.symbol, qty)
-                    res = binance.place_market_order(bot_config.symbol, Client.SIDE_SELL, sell_qty)
-                    binance_order_id = res.get("orderId")
-                    if res.get("executedQty") and float(res["executedQty"]) > 0:
-                        qty = Decimal(str(res["executedQty"]))
-                    if res.get("cummulativeQuoteQty") and float(res["cummulativeQuoteQty"]) > 0:
-                        net_revenue = Decimal(str(res["cummulativeQuoteQty"]))
-                        exit_price = net_revenue / qty
-
-                pnl = net_revenue - open_trade.cost
-                pnl_pct = (pnl / open_trade.cost) * Decimal("100.0") if open_trade.cost else Decimal("0.00")
-                mode_tag = f"Binance #{binance_order_id}" if binance_order_id else "Paper"
-
-                with transaction.atomic():
-                    open_trade.status = 'CLOSED'
-                    open_trade.exit_time = candle_time
-                    open_trade.exit_price = exit_price
-                    open_trade.net_revenue = net_revenue
-                    open_trade.pnl = pnl
-                    open_trade.pnl_pct = pnl_pct
-                    open_trade.is_win = pnl > 0
-                    open_trade.notes += f" | Auto SELL ({mode_tag} @ ${exit_price:,.2f})"
-                    open_trade.save()
-
-                    bot_config.current_cash += net_revenue
-                    bot_config.save(update_fields=['current_cash', 'updated_at'])
-
-                executed = True
-                message = (
-                    f"Executed {bot_config.mode} SELL: Closed @ ${exit_price:,.2f} | "
-                    f"Net PnL: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
-                )
-
+                if target_side is not None:
+                    spend = (
+                        min(bot_config.order_amount_usdt, bot_config.current_cash)
+                        if bot_config.order_amount_usdt > 0
+                        else bot_config.current_cash
+                    )
+                    if spend < Decimal("10.00"):
+                        messages.append(
+                            f"{signal_type} signal ignored: Order size (${spend:.2f}) is below minimum "
+                            f"$10.00 USDT (Available cash: ${bot_config.current_cash:.2f})"
+                        )
+                    elif is_live and not binance.is_authenticated:
+                        messages.append(
+                            f"{signal_type} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
+                        )
+                    else:
+                        fee = spend * fee_pct
+                        investable = spend - fee
+                        raw_qty = investable / price
+                        opened, open_msg = cls._open_position(
+                            bot_config, binance, target_side, price, raw_qty, spend, candle_time
+                        )
+                        messages.append(open_msg)
+                        executed = executed or opened
         else:
-            message = "No crossover signal on latest candle. Holding state."
+            messages.append("No crossover signal on latest candle. Holding state.")
+
+        message = " | ".join(m for m in messages if m)
 
         # Record into SignalLog
         SignalLog.objects.create(
@@ -165,7 +241,7 @@ class ExecutionService:
             fast_ema=fast_ema,
             slow_ema=slow_ema,
             executed=executed,
-            message=message
+            message=message,
         )
 
         return {
@@ -173,5 +249,5 @@ class ExecutionService:
             "executed": executed,
             "message": message,
             "price": float(price),
-            "current_cash": float(bot_config.current_cash)
+            "current_cash": float(bot_config.current_cash),
         }

@@ -16,10 +16,10 @@ class BotConfigAdmin(admin.ModelAdmin):
 @admin.register(Trade)
 class TradeAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'symbol', 'status', 'entry_time', 'entry_price',
+        'id', 'symbol', 'side', 'status', 'entry_time', 'entry_price',
         'exit_time', 'exit_price', 'quantity', 'pnl', 'pnl_pct', 'is_win'
     )
-    list_filter = ('status', 'symbol', 'is_win')
+    list_filter = ('status', 'side', 'symbol', 'is_win')
     search_fields = ('symbol', 'notes')
     readonly_fields = ('created_at',)
 

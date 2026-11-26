@@ -1,6 +1,6 @@
 """
-Binance Crypto Trading & Analytics Dashboard (Streamlit - Port 8501)
-Live Binance Spot Testnet Manual Trading Terminal & Chart Analytics.
+Binance Futures Trading & Analytics Dashboard (Streamlit - Port 8501)
+Live Binance Demo Futures Manual Trading Terminal & Chart Analytics.
 Directly uses core trading functions from trading.services.binance_trader:
   - getdata()
   - positions()
@@ -39,7 +39,7 @@ load_dotenv()
 
 # 2. Page Configuration
 st.set_page_config(
-    page_title="Binance Testnet Trading Terminal",
+    page_title="Binance Demo Futures Trading Terminal",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -129,12 +129,12 @@ zoom_key = f"{symbol}_{interval}_{st.session_state.zoom_version}"
 # 5. Header Section
 header_col1, header_col2 = st.columns([3, 1])
 with header_col1:
-    st.title("⚡ Binance Testnet Manual Trading Terminal")
-    st.caption("Live Testnet API Execution • Persistent Chart Zoom • Direct `binance_trader.py` Core Engine")
+    st.title("⚡ Binance Demo Futures Manual Trading Terminal")
+    st.caption("Live Demo Futures API Execution • Persistent Chart Zoom • Direct `binance_trader.py` Core Engine")
 
 with header_col2:
     if trader.is_authenticated:
-        st.success("🟢 Authenticated (Binance Spot Testnet)")
+        st.success("🟢 Authenticated (Binance Demo Futures)")
     else:
         st.warning("⚠️ Public / Paper Mode (No API Keys)")
 
@@ -177,7 +177,7 @@ def render_terminal():
         if has_pos and open_pos:
             st.metric(
                 label="Active Position",
-                value=f"LONG: {open_pos['quantity']:.5f} {asset_sym}",
+                value=f"{open_pos.get('side', 'LONG')}: {open_pos['quantity']:.5f} {asset_sym}",
                 delta=f"Entry: ${open_pos['entry_price']:,.2f}"
             )
         else:
@@ -205,7 +205,7 @@ def render_terminal():
         # Chart toolbar row: stream timestamp & reset zoom button
         tb_col1, tb_col2 = st.columns([4, 1])
         with tb_col1:
-            st.caption(f"📡 **Live Testnet Stream** ({interval}) • Last update: **{now_utc}** • *Mouse wheel zooms, double-click resets view*")
+            st.caption(f"📡 **Live Demo Futures Stream** ({interval}) • Last update: **{now_utc}** • *Mouse wheel zooms, double-click resets view*")
         with tb_col2:
             if st.button("🔍 Reset Zoom", key="btn_reset_zoom", use_container_width=True):
                 st.session_state.zoom_version += 1
@@ -315,7 +315,7 @@ def render_terminal():
     # --- RIGHT COLUMN: MANUAL TRADING CONTROLS (binance_trader actions) ---
     with col_trade:
         st.markdown("### 🎮 Manual Execution")
-        st.caption("Executes real demo orders on Binance Spot Testnet via `BinanceTrader`.")
+        st.caption("Executes real demo futures orders on Binance via `BinanceTrader`.")
 
         spend_usdt = st.number_input(
             "Order Amount (USDT)",
@@ -334,7 +334,7 @@ def render_terminal():
         # 1. BUY Action (calls trader.buy)
         buy_disabled = has_pos
         if st.button("🟢 BUY (Open Long)", use_container_width=True, disabled=buy_disabled, type="primary"):
-            with st.spinner(f"Placing Testnet BUY for ${spend_usdt:,.2f} USDT..."):
+            with st.spinner(f"Placing Demo Futures BUY for ${spend_usdt:,.2f} USDT..."):
                 res = trader.buy(symbol=symbol, amount_usdt=spend_usdt)
                 if res.get("ok"):
                     st.success(f"✅ BUY SUCCESS! Order #{res.get('binance_order_id')}")
@@ -343,8 +343,10 @@ def render_terminal():
                 else:
                     st.error(f"❌ {res.get('error')}")
 
-        # 2. BUYCLOSE Action (calls trader.buyclose)
-        close_disabled = not has_pos
+        # 2. BUYCLOSE Action (calls trader.buyclose) - only when LONG
+        is_long = bool(has_pos and open_pos and open_pos.get('side') == 'LONG')
+        is_short = bool(has_pos and open_pos and open_pos.get('side') == 'SHORT')
+        close_disabled = not is_long
         if st.button("🔴 BUYCLOSE (Close Long)", use_container_width=True, disabled=close_disabled):
             with st.spinner(f"Closing Long position in {symbol}..."):
                 res = trader.buyclose(symbol=symbol)
@@ -358,18 +360,29 @@ def render_terminal():
                     st.error(f"❌ {res.get('error')}")
 
         # Advanced Actions Expander: sell, sellclose, reset
-        with st.expander("🛠️ More Actions (Short / Reset)"):
-            st.caption("Test the other core methods in `binance_trader.py`:")
+        with st.expander("🛠️ More Actions (Short / Reset)", expanded=True):
+            st.caption("Open/close SHORT futures positions in `binance_trader.py`:")
 
-            if st.button("🔻 SELL (Short Signal / Exit)", use_container_width=True):
-                res = trader.sell(symbol=symbol, amount_usdt=spend_usdt)
-                st.write(res)
-                st.rerun()
+            if st.button("🔻 SELL (Open Short)", use_container_width=True, disabled=has_pos):
+                with st.spinner(f"Opening SHORT for ${spend_usdt:,.2f} USDT..."):
+                    res = trader.sell(symbol=symbol, amount_usdt=spend_usdt)
+                    if res.get("ok"):
+                        st.success(f"✅ SHORT OPEN! Order #{res.get('binance_order_id')}")
+                        st.toast(f"Short {res.get('quantity')} {symbol} @ ${res.get('price'):,.2f}!", icon="🔻")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {res.get('error')}")
 
-            if st.button("🔄 SELLCLOSE (Cover Short)", use_container_width=True):
-                res = trader.sellclose(symbol=symbol)
-                st.write(res)
-                st.rerun()
+            if st.button("🔄 SELLCLOSE (Cover Short)", use_container_width=True, disabled=not is_short):
+                with st.spinner(f"Covering SHORT in {symbol}..."):
+                    res = trader.sellclose(symbol=symbol)
+                    if res.get("ok"):
+                        pnl_val = res.get('realized_pnl', 0)
+                        pnl_pct_val = res.get('realized_pnl_pct', 0)
+                        st.success(f"✅ Short Covered! Realized PnL: ${pnl_val:+,.2f} ({pnl_pct_val:+.2f}%)")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {res.get('error')}")
 
             st.markdown("---")
             if st.button("⚠️ Reset All Test Trades", use_container_width=True):
@@ -379,7 +392,7 @@ def render_terminal():
 
     # --- BOTTOM SECTION: REAL DATABASE TRADE HISTORY ---
     st.markdown("---")
-    tab_trades, tab_signals = st.tabs(["📋 Real Testnet Trades (Database)", "📡 Signal Logs"])
+    tab_trades, tab_signals = st.tabs(["📋 Real Demo Futures Trades (Database)", "📡 Signal Logs"])
 
     with tab_trades:
         trades_qs = Trade.objects.filter(bot_config_id=trader.bot.id).order_by('-entry_time')[:30]
@@ -389,6 +402,7 @@ def render_terminal():
                 rows.append({
                     "Trade ID": f"#{t.id}",
                     "Symbol": t.symbol,
+                    "Side": t.side,
                     "Status": "🟢 OPEN" if t.status == 'OPEN' else "⚪ CLOSED",
                     "Entry Time": t.entry_time.strftime("%Y-%m-%d %H:%M:%S") if t.entry_time else "-",
                     "Entry Price": f"${t.entry_price:,.2f}",
@@ -401,7 +415,7 @@ def render_terminal():
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
         else:
-            st.info("No recorded trades yet. Click 'BUY' above to place your first Testnet trade!")
+            st.info("No recorded trades yet. Click 'BUY' above to place your first Demo Futures trade!")
 
     with tab_signals:
         signals_qs = SignalLog.objects.filter(bot_config_id=trader.bot.id).order_by('-timestamp')[:20]

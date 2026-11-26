@@ -87,7 +87,10 @@ class ExecutionServiceTests(TestCase):
         trade.refresh_from_db()
         self.assertEqual(trade.status, "CLOSED")
         self.assertTrue(trade.is_win)
-        self.assertGreater(self.bot.current_cash, Decimal("1000.00"))
+        # SELL reverses the position: long is closed and a new SHORT is opened
+        short = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertEqual(short.side, "SHORT")
+        self.assertGreater(self.bot.current_cash, Decimal("900.00"))
 
     def test_live_mode_executes_binance_orders_with_mock(self):
         self.bot.mode = "LIVE"
@@ -99,6 +102,7 @@ class ExecutionServiceTests(TestCase):
         mock_binance.place_market_order.side_effect = [
             {"orderId": 12345, "executedQty": "0.00100", "cummulativeQuoteQty": "50.00"},
             {"orderId": 12346, "executedQty": "0.00100", "cummulativeQuoteQty": "52.00"},
+            {"orderId": 12347, "executedQty": "0.00100", "cummulativeQuoteQty": "52.00"},
         ]
 
         t1 = datetime(2026, 11, 25, 11, 0, tzinfo=dt_tz.utc)
@@ -120,8 +124,34 @@ class ExecutionServiceTests(TestCase):
         self.assertTrue(sell_res["executed"])
         trade.refresh_from_db()
         self.assertEqual(trade.status, "CLOSED")
-        self.assertEqual(trade.pnl, Decimal("2.0000"))
+        self.assertEqual(trade.pnl, Decimal("1.9480"))
         self.assertIn("Binance #12346", trade.notes)
+        short = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertEqual(short.side, "SHORT")
+
+    def test_paper_short_profit_on_price_drop(self):
+        t1 = datetime(2026, 11, 25, 12, 0, tzinfo=dt_tz.utc)
+        sell_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "SELL", "timestamp": t1, "price": 50000.0, "fast_ema": 49900.0, "slow_ema": 50000.0},
+        )
+        self.assertTrue(sell_res["executed"])
+        short = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertEqual(short.side, "SHORT")
+
+        t2 = datetime(2026, 11, 25, 12, 15, tzinfo=dt_tz.utc)
+        buy_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "BUY", "timestamp": t2, "price": 45000.0, "fast_ema": 45100.0, "slow_ema": 45000.0},
+        )
+        self.assertTrue(buy_res["executed"])
+        short.refresh_from_db()
+        self.assertEqual(short.status, "CLOSED")
+        self.assertTrue(short.is_win)
+        self.assertGreater(short.pnl, Decimal("0"))
+        # BUY reversed the short into a fresh LONG
+        long_trade = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertEqual(long_trade.side, "LONG")
 
 
 class DashboardViewsTests(TestCase):

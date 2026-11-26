@@ -58,9 +58,12 @@ class Command(BaseCommand):
 
             if open_trade:
                 gross_val = open_trade.quantity * current_price
-                unrealized_pnl = gross_val - open_trade.cost
+                if open_trade.side == 'SHORT':
+                    unrealized_pnl = (open_trade.entry_price - current_price) * open_trade.quantity
+                else:
+                    unrealized_pnl = gross_val - open_trade.cost
                 unrealized_pnl_pct = (unrealized_pnl / open_trade.cost) * Decimal("100.0")
-                self.stdout.write(self.style.SUCCESS(f"\n[ACTIVE POSITION: OPEN]"))
+                self.stdout.write(self.style.SUCCESS(f"\n[ACTIVE POSITION: OPEN {open_trade.side}]"))
                 self.stdout.write(f"  Entry Time:       {open_trade.entry_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
                 self.stdout.write(f"  Entry Price:      ${open_trade.entry_price:,.2f}")
                 self.stdout.write(f"  Holding Quantity: {open_trade.quantity:.6f} {bot.symbol}")
@@ -152,8 +155,13 @@ class Command(BaseCommand):
 
             gross_revenue = open_trade.quantity * current_price
             exit_fee = gross_revenue * bot.fee_pct
-            net_revenue = gross_revenue - exit_fee
-            pnl = net_revenue - open_trade.cost
+            if open_trade.side == 'SHORT':
+                entry_fee = open_trade.cost * bot.fee_pct
+                pnl = (open_trade.entry_price - current_price) * open_trade.quantity - entry_fee - exit_fee
+                net_revenue = open_trade.cost + pnl
+            else:
+                net_revenue = gross_revenue - exit_fee
+                pnl = net_revenue - open_trade.cost
             pnl_pct = (pnl / open_trade.cost) * Decimal("100.0")
 
             self.stdout.write(f"\n[EXECUTING CLOSE / SQUARE-OFF]")
@@ -187,12 +195,12 @@ class Command(BaseCommand):
                 bot_config=bot,
                 timestamp=timezone.now(),
                 symbol=bot.symbol,
-                signal_type='SELL',
+                signal_type='BUY' if open_trade.side == 'SHORT' else 'SELL',
                 price=current_price,
                 fast_ema=Decimal("0"),
                 slow_ema=Decimal("0"),
                 executed=True,
-                message=f"Manual CLOSE: Realized PnL: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
+                message=f"Manual {open_trade.side} CLOSE: Realized PnL: ${pnl:+,.2f} ({pnl_pct:+.2f}%)"
             )
 
             self.stdout.write(self.style.SUCCESS(f"\n[SUCCESS] Trade #{open_trade.id} CLOSED. New Cash Balance: ${bot.current_cash:,.2f} USDT"))

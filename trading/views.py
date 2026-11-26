@@ -90,7 +90,10 @@ def api_status_view(request):
             entry_price = float(open_trade.entry_price)
             if live_price is not None:
                 current_val = qty * live_price
-                unrealized_pnl = current_val - cost
+                if open_trade.side == 'SHORT':
+                    unrealized_pnl = (entry_price - live_price) * qty
+                else:
+                    unrealized_pnl = current_val - cost
                 unrealized_pnl_pct = (unrealized_pnl / cost * 100.0) if cost else 0.0
             else:
                 current_val = cost
@@ -99,6 +102,7 @@ def api_status_view(request):
 
             open_pos_data = {
                 'trade_id': open_trade.id,
+                'side': open_trade.side,
                 'entry_price': entry_price,
                 'quantity': qty,
                 'cost': cost,
@@ -183,6 +187,7 @@ def api_status_view(request):
             'id': t.id,
             'symbol': t.symbol,
             'status': t.status,
+            'side': t.side,
             'entry_time': t.entry_time.strftime('%Y-%m-%d %H:%M:%S'),
             'entry_price': float(t.entry_price),
             'quantity': float(t.quantity),

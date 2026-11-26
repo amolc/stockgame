@@ -499,7 +499,7 @@
                     else if (t.is_win) badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400">WIN</span>';
                     return `<tr>
                         <td class="py-2.5 pr-2 text-gray-400">#${t.id}</td>
-                        <td class="py-2.5 pr-2 text-cyan-400">${escapeHtml(t.symbol)}</td>
+                        <td class="py-2.5 pr-2 text-cyan-400">${escapeHtml(t.symbol)} <span class="text-[10px] px-1 py-0.5 rounded ${t.side === 'SHORT' ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}">${t.side || 'LONG'}</span></td>
                         <td class="py-2.5 pr-2 text-white">$${t.entry_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                         <td class="py-2.5 pr-2 text-gray-300">${t.quantity.toFixed(5)}</td>
                         <td class="py-2.5 pr-2 text-gray-300">${exitStr}</td>
@@ -575,7 +575,12 @@
                     // Instant sub-second floating PnL if holding an open position
                     if (activePositionCache && activePositionCache.quantity && activePositionCache.cost) {
                         const curVal = activePositionCache.quantity * price;
-                        const pnl = curVal - activePositionCache.cost;
+                        let pnl;
+                        if (activePositionCache.side === 'SHORT') {
+                            pnl = (activePositionCache.entry_price - price) * activePositionCache.quantity;
+                        } else {
+                            pnl = curVal - activePositionCache.cost;
+                        }
                         const pnlPct = (pnl / activePositionCache.cost) * 100.0;
                         const unEl = document.getElementById('kpi-unrealized');
                         if (unEl) {
@@ -656,7 +661,7 @@
                     if (primary.has_open_position && primary.open_position) {
                         activePositionCache = primary.open_position;
                         const op = primary.open_position;
-                        document.getElementById('kpi-open-pos').textContent = `LONG ${op.quantity.toFixed(5)} ${assetSym}`;
+                        document.getElementById('kpi-open-pos').textContent = `${op.side || 'LONG'} ${op.quantity.toFixed(5)} ${assetSym}`;
                         const unEl = document.getElementById('kpi-unrealized');
                         unEl.textContent = `Unrealized: ${op.unrealized_pnl >= 0 ? '+' : ''}$${op.unrealized_pnl.toFixed(2)} (${op.unrealized_pnl_pct >= 0 ? '+' : ''}${op.unrealized_pnl_pct.toFixed(2)}%)`;
                         unEl.className = `text-xs mt-1 ${op.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
