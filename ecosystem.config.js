@@ -1,22 +1,25 @@
 /**
  * PM2 Process Manager Configuration for StockGame
- * Controls 24/7 background worker and Django web server.
+ *
+ * - `stockgame`     : web app via runstockgame.sh (migrations + Django on 127.0.0.1:12500)
+ * - `stockgame-bot` : trading daemon via runbot.sh (manage.py run_bot)
  *
  * Usage:
- *   pm2 start ecosystem.config.js   (Start all background apps)
+ *   pm2 start ecosystem.config.js   (Start both apps)
  *   pm2 status                      (Check status & CPU/RAM)
- *   pm2 logs                        (View live stream of trade execution)
+ *   pm2 logs                        (View live logs)
+ *   pm2 restart all                 (Restart after a deploy)
+ *   pm2 restart stockgame-bot       (Restart only the bot)
  *   pm2 stop all                    (Stop processes)
  */
 
 module.exports = {
   apps: [
     {
-      name: "stockgame-worker",
-      script: "manage.py",
-      args: "run_bot --interval 30",
-      // Uses the Python virtual environment interpreter
-      interpreter: process.platform === "win32" ? "./venv/Scripts/python.exe" : "./venv/bin/python",
+      name: "stockgame",
+      script: "./runstockgame.sh",
+      interpreter: "bash",
+      cwd: __dirname,
       autorestart: true,
       watch: false,
       max_memory_restart: "300M",
@@ -27,16 +30,18 @@ module.exports = {
       }
     },
     {
-      name: "stockgame-web",
-      script: "manage.py",
-      args: "runserver 0.0.0.0:8080",
-      interpreter: process.platform === "win32" ? "./venv/Scripts/python.exe" : "./venv/bin/python",
+      name: "stockgame-bot",
+      script: "./runbot.sh",
+      interpreter: "bash",
+      cwd: __dirname,
       autorestart: true,
       watch: false,
       max_memory_restart: "300M",
+      restart_delay: 5000,
       env: {
         PYTHONUNBUFFERED: "1",
-        DJANGO_SETTINGS_MODULE: "stockgame.settings"
+        DJANGO_SETTINGS_MODULE: "stockgame.settings",
+        BOT_INTERVAL: "60"
       }
     }
   ]

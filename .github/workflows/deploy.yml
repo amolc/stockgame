@@ -62,6 +62,7 @@ jobs:
 
           echo "Restarting services with PM2..."
           pm2 restart stockgame
+          pm2 restart stockgame-bot
           
           echo "Deployment completed successfully!"
           EOF
