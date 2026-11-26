@@ -50,19 +50,24 @@ jobs:
           git pull --ff-only origin main
 
           echo "Installing Python dependencies..."
-          source .venv/bin/activate
+          if [ -d .venv ]; then
+            VENV_DIR=.venv
+          elif [ -d venv ]; then
+            VENV_DIR=venv
+          else
+            python3 -m venv venv
+            VENV_DIR=venv
+          fi
+          # shellcheck disable=SC1091
+          source "$VENV_DIR/bin/activate"
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet -r requirements.txt
 
-          echo "Running database migrations & collecting static files..."
+          echo "Running database migrations..."
           python manage.py migrate --noinput
-          python manage.py collectstatic --noinput
 
-         
+          echo "Starting/reloading PM2 services..."
+          pm2 startOrReload ecosystem.config.js --update-env
 
-          echo "Restarting services with PM2..."
-          pm2 restart stockgame
-          pm2 restart stockgame-bot
-          
           echo "Deployment completed successfully!"
           EOF
