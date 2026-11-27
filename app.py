@@ -32,7 +32,7 @@ import django
 django.setup()
 
 from trading.services.binance_trader import BinanceTrader
-from trading.models import BotConfig, Trade, SignalLog
+from trading.models import TradingAccount, BotConfig, Trade, SignalLog
 from src.strategy import generate_crossover_signals
 
 load_dotenv()
@@ -74,24 +74,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# 3. Singleton Trader Instance (Reuses HTTPS connection pool)
+# 3. Singleton Trader Instance per Account/Bot (Reuses HTTPS connection pool)
 @st.cache_resource
-def get_trader_instance():
-    return BinanceTrader()
-
-trader = get_trader_instance()
+def get_trader_instance(bot_id=None):
+    bot = BotConfig.objects.select_related("account").filter(id=bot_id).first() if bot_id else None
+    return BinanceTrader(bot_config=bot)
 
 
 # 4. Sidebar Configuration
-st.sidebar.title("⚡ Terminal Settings")
+st.sidebar.title("Terminal Settings")
+
+accounts = list(TradingAccount.objects.all().order_by("id"))
+selected_account = None
+if accounts:
+    acct_names = [f"{a.name} ({a.environment})" for a in accounts]
+    acct_idx = st.sidebar.selectbox("Trading Account", range(len(accounts)), format_func=lambda i: acct_names[i], index=0)
+    selected_account = accounts[acct_idx]
 
 st.sidebar.subheader("Market Instrument")
-preset_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "DOGEUSDT", "Custom"]
+preset_symbols = ["BTCUSDT", "SOXLUSDT", "TQQQUSDT", "ETHUSDT", "NVDAUSDT", "ANTUSDT", "Custom"]
 selected_symbol_preset = st.sidebar.selectbox("Symbol", preset_symbols, index=0)
 if selected_symbol_preset == "Custom":
     symbol = st.sidebar.text_input("Enter Pair", "BTCUSDT").strip().upper()
 else:
     symbol = selected_symbol_preset
+
+selected_bot = None
+if selected_account is not None:
+    selected_bot = BotConfig.objects.filter(account=selected_account, symbol=symbol).first() or BotConfig.objects.filter(account=selected_account).first()
+trader = get_trader_instance(selected_bot.id if selected_bot else None)
 
 interval = st.sidebar.selectbox(
     "Candle Interval",

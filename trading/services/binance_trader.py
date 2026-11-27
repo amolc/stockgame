@@ -28,15 +28,37 @@ def _env_true(name: str) -> bool:
 
 class BinanceTrader:
     def __init__(self, bot_config: Optional[BotConfig] = None):
-        self.api_key = os.getenv("BINANCE_API_KEY", "")
-        self.api_secret = os.getenv("BINANCE_API_SECRET", "")
-        self.demo = _env_true("BINANCE_DEMO")
-        self.testnet = _env_true("BINANCE_TESTNET") and not self.demo
-        self.market = os.getenv("BINANCE_MARKET", "futures").lower()
-        try:
-            self.leverage = int(os.getenv("BINANCE_FUTURES_LEVERAGE", "5"))
-        except ValueError:
-            self.leverage = 5
+        # Attach BotConfig first so we can inherit its TradingAccount credentials if linked
+        self.bot = bot_config or BotConfig.objects.select_related("account").filter(is_active=True).first()
+        if not self.bot:
+            self.bot = BotConfig.objects.create(
+                name="BTCUSDT Default Bot",
+                symbol="BTCUSDT",
+                interval="15m",
+                initial_capital=Decimal("10000.00"),
+                current_cash=Decimal("10000.00"),
+                is_active=True
+            )
+
+        acct = getattr(self.bot, "account", None)
+        if acct is not None:
+            is_paper = acct.environment == "PAPER"
+            self.api_key = "" if is_paper else (acct.api_key or "")
+            self.api_secret = "" if is_paper else acct.get_api_secret()
+            self.demo = acct.environment == "DEMO"
+            self.testnet = acct.environment == "TESTNET"
+            self.market = (acct.market or "futures").lower()
+            self.leverage = int(acct.leverage or 5)
+        else:
+            self.api_key = os.getenv("BINANCE_API_KEY", "")
+            self.api_secret = os.getenv("BINANCE_API_SECRET", "")
+            self.demo = _env_true("BINANCE_DEMO")
+            self.testnet = _env_true("BINANCE_TESTNET") and not self.demo
+            self.market = os.getenv("BINANCE_MARKET", "futures").lower()
+            try:
+                self.leverage = int(os.getenv("BINANCE_FUTURES_LEVERAGE", "5"))
+            except ValueError:
+                self.leverage = 5
 
         # Initialize Binance Client with resilient timeout for network latency
         self.client = Client(
@@ -47,18 +69,6 @@ class BinanceTrader:
             ping=False,
             requests_params={"timeout": 25},
         )
-
-        # Attach BotConfig (defaults to first active bot in DB)
-        self.bot = bot_config or BotConfig.objects.filter(is_active=True).first()
-        if not self.bot:
-            self.bot = BotConfig.objects.create(
-                name="BTCUSDT Default Bot",
-                symbol="BTCUSDT",
-                interval="15m",
-                initial_capital=Decimal("10000.00"),
-                current_cash=Decimal("10000.00"),
-                is_active=True
-            )
 
     @property
     def is_authenticated(self) -> bool:

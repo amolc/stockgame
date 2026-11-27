@@ -4,10 +4,11 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from django.contrib.auth import get_user_model
 from django.test import Client as DjangoClient, TestCase
 from django.urls import reverse
 
-from trading.models import BotConfig, SignalLog, Trade
+from trading.models import DEFAULT_BOT_SYMBOLS, BotConfig, SignalLog, Trade, TradingAccount
 from trading.services.execution_service import ExecutionService
 from trading.tasks import run_all_active_bots
 
@@ -265,7 +266,10 @@ class ExecutionServiceTests(TestCase):
 
 class DashboardViewsTests(TestCase):
     def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("superadmin", "admin@test.local", "pass1234")
         self.client = DjangoClient()
+        self.client.force_login(self.admin)
         self.bot = BotConfig.objects.create(
             name="Dashboard Bot",
             symbol="BTCUSDT",
@@ -331,8 +335,12 @@ class DashboardViewsTests(TestCase):
             index=idx,
         )
         inst = mock_bs_cls.return_value
+        mock_bs_cls.for_bot.return_value = inst
         inst.is_authenticated = True
+        inst.is_demo = True
+        inst.demo = False
         inst.testnet = True
+        inst.market = "futures"
         inst.get_ticker_price.return_value = 105.0
         inst.get_account_balances.return_value = {"usdt": 5000.0, "asset": 0.1}
         inst.fetch_klines.return_value = df
@@ -375,12 +383,19 @@ class BotTasksAndCountTests(TestCase):
         BotConfig.objects.create(name="Bot Paused", symbol="ETHUSDT", is_active=False)
 
         inst = mock_bs_cls.return_value
+        mock_bs_cls.for_bot.return_value = inst
         inst.is_authenticated = False
+        inst.is_demo = False
+        inst.demo = False
         inst.testnet = False
+        inst.market = "futures"
         inst.get_ticker_price.return_value = 50000.0
         inst.get_account_balances.return_value = {"usdt": None, "asset": None}
 
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin2", "admin2@test.local", "pass1234")
         client = DjangoClient()
+        client.force_login(admin)
         dash_resp = client.get(reverse("trading:dashboard"))
         self.assertEqual(dash_resp.status_code, 200)
         self.assertContains(dash_resp, "1 / 2 Active Bot(s)")
@@ -391,3 +406,120 @@ class BotTasksAndCountTests(TestCase):
         kpis = status_resp.json()["kpis"]
         self.assertEqual(kpis["active_bots"], 1)
         self.assertEqual(kpis["total_bots"], 2)
+
+
+
+class MultiAccountSuperAdminTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("superadmin3", "admin3@test.local", "pass1234")
+        self.client = DjangoClient()
+
+    def test_requires_superadmin_login(self):
+        resp = self.client.get(reverse("trading:dashboard"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login/", resp["Location"])
+
+        api_resp = self.client.get(reverse("trading:api_status"))
+        self.assertEqual(api_resp.status_code, 401)
+
+    def test_account_secret_encryption_and_seed_6_symbols(self):
+        acct = TradingAccount(name="nitin", environment="DEMO", market="futures", leverage=5, api_key="KEY1234567890")
+        acct.set_api_secret("SECRET_ABC_XYZ")
+        acct.save()
+
+        acct.refresh_from_db()
+        self.assertTrue(acct.api_secret_encrypted.startswith("enc:v1:"))
+        self.assertNotIn("SECRET_ABC_XYZ", acct.api_secret_encrypted)
+        self.assertEqual(acct.get_api_secret(), "SECRET_ABC_XYZ")
+        self.assertEqual(acct.masked_api_key, "KEY1...7890")
+
+        created = acct.ensure_default_bots()
+        self.assertEqual(len(created), 6)
+        self.assertEqual(
+            set(acct.bots.values_list("symbol", flat=True)),
+            set(DEFAULT_BOT_SYMBOLS),
+        )
+        # Idempotent on second call
+        self.assertEqual(acct.ensure_default_bots(), [])
+
+    @patch("trading.views.BinanceService")
+    def test_superadmin_account_endpoints(self, mock_bs_cls):
+        self.client.force_login(self.admin)
+        mock_bs_cls.from_account.return_value.test_connection.return_value = (True, "Demo Futures connected", 5000.0)
+
+        create_resp = self.client.post(
+            reverse("trading:create_account"),
+            data=json.dumps({
+                "name": "amol",
+                "environment": "DEMO",
+                "market": "futures",
+                "leverage": 5,
+                "api_key": "AMOLKEY12345",
+                "api_secret": "AMOLSECRET123",
+                "seed_symbols": True,
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        payload = create_resp.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(len(payload["created_symbols"]), 6)
+
+        acct_id = payload["account"]["id"]
+        test_resp = self.client.post(reverse("trading:test_account", args=[acct_id]))
+        self.assertEqual(test_resp.status_code, 200)
+        self.assertTrue(test_resp.json()["ok"])
+
+        acct = TradingAccount.objects.get(id=acct_id)
+        self.assertEqual(acct.last_health_status, "OK")
+
+        # Update without changing secret preserves encrypted secret
+        upd_resp = self.client.post(
+            reverse("trading:update_account", args=[acct_id]),
+            data=json.dumps({"name": "amol", "environment": "DEMO", "market": "futures", "leverage": 10}),
+            content_type="application/json",
+        )
+        self.assertEqual(upd_resp.status_code, 200)
+        acct.refresh_from_db()
+        self.assertEqual(acct.leverage, 10)
+        self.assertEqual(acct.get_api_secret(), "AMOLSECRET123")
+
+        # Bulk pause bots on account
+        pause_resp = self.client.post(
+            reverse("trading:toggle_account_bots", args=[acct_id]),
+            data=json.dumps({"action": "pause"}),
+            content_type="application/json",
+        )
+        self.assertEqual(pause_resp.status_code, 200)
+        self.assertEqual(acct.bots.filter(is_active=True).count(), 0)
+
+    @patch("trading.tasks.BinanceService")
+    def test_paused_account_bots_are_skipped_in_cycle(self, mock_bs_cls):
+        acct1 = TradingAccount.objects.create(name="acct1", is_active=True)
+        acct2 = TradingAccount.objects.create(name="acct2", is_active=False)
+        BotConfig.objects.create(account=acct1, name="A1 BTC", symbol="BTCUSDT", is_active=True)
+        BotConfig.objects.create(account=acct2, name="A2 BTC", symbol="BTCUSDT", is_active=True)
+
+        idx = pd.date_range("2026-11-25", periods=60, freq="15min", tz="UTC")
+        df = pd.DataFrame(
+            {
+                "open": [100.0] * 60,
+                "high": [101.0] * 60,
+                "low": [99.0] * 60,
+                "close": [100.0 + i * 0.1 for i in range(60)],
+                "volume": [10.0] * 60,
+            },
+            index=idx,
+        )
+        inst = mock_bs_cls.for_bot.return_value
+        inst.demo = True
+        inst.testnet = False
+        inst.market = "futures"
+        inst.is_authenticated = False
+        inst.is_demo = True
+        inst.fetch_klines.return_value = df
+
+        results = run_all_active_bots()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["account"], "acct1")

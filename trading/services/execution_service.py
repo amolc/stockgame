@@ -52,7 +52,7 @@ class ExecutionService:
             return True, ""
 
         if binance is None:
-            binance = BinanceService()
+            binance = BinanceService.for_bot(bot_config)
         if not binance.is_authenticated:
             return False, (
                 f"{open_trade.side} position sync failed: Bot mode is LIVE but "
@@ -169,7 +169,7 @@ class ExecutionService:
 
         if is_live:
             if binance is None:
-                binance = BinanceService()
+                binance = BinanceService.for_bot(bot_config)
             if not binance.is_authenticated:
                 return False, f"{side} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
 
@@ -252,7 +252,7 @@ class ExecutionService:
 
         if is_live:
             if binance is None:
-                binance = BinanceService()
+                binance = BinanceService.for_bot(bot_config)
             if not binance.is_authenticated:
                 return False, "SELL signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
 
@@ -352,7 +352,7 @@ class ExecutionService:
 
         is_live = bot_config.mode == "LIVE"
         if is_live and binance is None:
-            binance = BinanceService()
+            binance = BinanceService.for_bot(bot_config)
 
         mirror = (
             not is_live
