@@ -5,6 +5,7 @@ from typing import Optional
 import pandas as pd
 from dotenv import load_dotenv
 from binance.client import Client
+from trading.services.binance_ws import ws_manager
 
 load_dotenv()
 
@@ -129,17 +130,35 @@ class BinanceService:
             return False, str(exc), None
 
     def fetch_klines(self, symbol: str = "BTCUSDT", interval: str = "15m", lookback: str = "3 days ago UTC") -> pd.DataFrame:
-        if self.is_futures:
-            # Futures klines ignore start_str; request the most recent window.
-            raw_klines = self.client.futures_klines(symbol=symbol, interval=interval, limit=1500)
-        else:
-            raw_klines = self.client.get_historical_klines(
-                symbol=symbol,
-                interval=interval,
-                start_str=lookback,
-            )
+        sym = symbol.upper()
+        env_key = (self.demo, self.testnet, self.market)
+        ws_manager.subscribe_kline(env_key, sym, interval)
+
+        cached_df = ws_manager.get_cached_klines(env_key, sym, interval)
+        if cached_df is not None and not cached_df.empty:
+            return cached_df
+
+        err_key = ("klines", env_key, sym, interval)
+        cooldown_err = ws_manager.get_error_cooldown(err_key)
+        if cooldown_err is not None:
+            raise RuntimeError(cooldown_err)
+
+        try:
+            if self.is_futures:
+                # Futures klines ignore start_str; request the most recent window.
+                raw_klines = self.client.futures_klines(symbol=sym, interval=interval, limit=1500)
+            else:
+                raw_klines = self.client.get_historical_klines(
+                    symbol=sym,
+                    interval=interval,
+                    start_str=lookback,
+                )
+        except Exception as exc:
+            ws_manager.set_error_cooldown(err_key, exc, default_ttl=30.0)
+            raise
+
         if not raw_klines:
-            raise ValueError(f"No kline data returned from Binance for {symbol} ({interval})")
+            raise ValueError(f"No kline data returned from Binance for {sym} ({interval})")
 
         columns = [
             "open_time", "open", "high", "low", "close", "volume",
@@ -156,47 +175,107 @@ class BinanceService:
         for col in ["open", "high", "low", "close", "volume"]:
             df[col] = df[col].astype(float)
 
+        ws_manager.set_klines(env_key, sym, interval, df)
         return df
 
     def get_ticker_price(self, symbol: str = "BTCUSDT") -> float:
-        if self.is_futures:
-            ticker = self.client.futures_symbol_ticker(symbol=symbol)
-        else:
-            ticker = self.client.get_symbol_ticker(symbol=symbol)
-        return float(ticker["price"])
+        sym = symbol.upper()
+        env_key = (self.demo, self.testnet, self.market)
+        ws_manager.subscribe_ticker(env_key, sym)
+
+        cached_price = ws_manager.get_cached_price(env_key, sym)
+        if cached_price is not None:
+            return cached_price
+
+        err_key = ("price", env_key, sym)
+        cooldown_err = ws_manager.get_error_cooldown(err_key)
+        if cooldown_err is not None:
+            raise RuntimeError(cooldown_err)
+
+        try:
+            if self.is_futures:
+                ticker = self.client.futures_symbol_ticker(symbol=sym)
+            else:
+                ticker = self.client.get_symbol_ticker(symbol=sym)
+            price = float(ticker["price"])
+        except Exception as exc:
+            ws_manager.set_error_cooldown(err_key, exc, default_ttl=30.0)
+            raise
+
+        ws_manager.set_price(env_key, sym, price)
+        return price
 
     def get_account_balances(self, symbol: str = "BTCUSDT") -> dict:
-        """Fetch free USDT and open position size for the symbol when API keys are configured."""
+        """Fetch free USDT and open position size for the symbol (WebSocket-backed with REST fallback)."""
         if not self.is_authenticated:
             return {"usdt": None, "asset": None}
 
-        if self.is_futures:
-            usdt_bal = None
-            asset_bal = None
-            for b in self.client.futures_account_balance():
-                if b.get("asset") == "USDT":
-                    usdt_bal = float(b.get("availableBalance", b.get("balance", 0)))
-                    break
-            try:
-                for p in self.client.futures_position_information(symbol=symbol):
-                    amt = float(p.get("positionAmt", 0))
-                    if amt:
-                        asset_bal = abs(amt)
-                        break
-            except Exception:
-                pass
-            return {"usdt": usdt_bal, "asset": asset_bal}
+        sym = symbol.upper()
+        acct_key = (self.api_key, self.demo, self.testnet, self.market)
+        ws_manager.subscribe_user_stream(acct_key, self.api_secret)
 
-        base_asset = symbol[:-4] if symbol.endswith("USDT") else symbol
-        acc = self.client.get_account()
-        usdt_bal = None
-        asset_bal = None
-        for b in acc.get("balances", []):
-            if b["asset"] == "USDT":
-                usdt_bal = float(b["free"])
-            elif b["asset"] == base_asset:
-                asset_bal = float(b["free"])
-        return {"usdt": usdt_bal, "asset": asset_bal}
+        cached_bal = ws_manager.get_account_balance_for_symbol(acct_key, sym, self.is_futures)
+        if cached_bal is not None:
+            return cached_bal
+
+        err_key = ("balance", acct_key)
+        cooldown_err = ws_manager.get_error_cooldown(err_key)
+        if cooldown_err is not None:
+            raise RuntimeError(cooldown_err)
+
+        try:
+            if self.is_futures:
+                usdt_bal = None
+                for b in self.client.futures_account_balance():
+                    if b.get("asset") == "USDT":
+                        usdt_bal = float(b.get("availableBalance", b.get("balance", 0)))
+                        break
+                positions: dict[str, float] = {}
+                position_details: list[dict] = []
+                try:
+                    for p in self.client.futures_position_information():
+                        p_sym = (p.get("symbol") or "").upper()
+                        amt = float(p.get("positionAmt", 0))
+                        if p_sym and amt:
+                            positions[p_sym] = abs(amt)
+                            position_details.append({
+                                "symbol": p_sym,
+                                "side": "LONG" if amt > 0 else "SHORT",
+                                "qty": abs(amt),
+                                "entry_price": float(p.get("entryPrice", 0) or 0),
+                                "mark_price": float(p.get("markPrice", 0) or 0),
+                                "unrealized_pnl": float(p.get("unRealizedProfit", 0) or 0),
+                            })
+                except Exception:
+                    pass
+                ws_manager.set_account_snapshot(
+                    acct_key, usdt_bal, positions=positions, position_details=position_details
+                )
+                return {"usdt": usdt_bal, "asset": positions.get(sym)}
+
+            base_asset = sym[:-4] if sym.endswith("USDT") else sym
+            acc = self.client.get_account()
+            usdt_bal = None
+            spot_balances: dict[str, float] = {}
+            for b in acc.get("balances", []):
+                asset_name = (b.get("asset") or "").upper()
+                free_val = float(b["free"])
+                if asset_name == "USDT":
+                    usdt_bal = free_val
+                elif asset_name and free_val > 0:
+                    spot_balances[asset_name] = free_val
+            ws_manager.set_account_snapshot(acct_key, usdt_bal, spot=spot_balances)
+            return {"usdt": usdt_bal, "asset": spot_balances.get(base_asset)}
+        except Exception as exc:
+            ws_manager.set_error_cooldown(err_key, exc, default_ttl=30.0)
+            raise
+
+    def get_exchange_positions(self) -> list[dict]:
+        """Return cached open exchange positions for this authenticated account."""
+        if not self.is_authenticated:
+            return []
+        acct_key = (self.api_key, self.demo, self.testnet, self.market)
+        return ws_manager.get_account_positions(acct_key)
 
     def _get_cached_futures_exchange_info(self) -> dict:
         cache_key = (self.demo, self.testnet, self.market)

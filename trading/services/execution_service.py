@@ -115,7 +115,10 @@ class ExecutionService:
         any open paper trade that was created before mirroring was switched on is
         copied to the demo account once, so subsequent closes are reduce-only safe.
         """
-        if bot_config.mode != "PAPER" or not getattr(bot_config, "mirror_to_demo", False):
+        is_demo_bot = bot_config.mode == "DEMO" or (
+            bot_config.mode == "PAPER" and getattr(bot_config, "mirror_to_demo", False)
+        )
+        if not is_demo_bot:
             return True, ""
         if binance is None or not binance.is_authenticated or not binance.is_demo:
             return True, ""
@@ -351,12 +354,13 @@ class ExecutionService:
         fee_pct = bot_config.fee_pct
 
         is_live = bot_config.mode == "LIVE"
-        if is_live and binance is None:
+        is_demo_mode = bot_config.mode == "DEMO"
+        if (is_live or is_demo_mode) and binance is None:
             binance = BinanceService.for_bot(bot_config)
 
         mirror = (
             not is_live
-            and getattr(bot_config, "mirror_to_demo", False)
+            and (is_demo_mode or getattr(bot_config, "mirror_to_demo", False))
             and binance is not None
             and binance.is_authenticated
             and binance.is_demo
@@ -426,30 +430,53 @@ class ExecutionService:
                         target_side = None
 
                 if target_side is not None:
-                    spend = (
-                        min(bot_config.order_amount_usdt, bot_config.current_cash)
-                        if bot_config.order_amount_usdt > 0
-                        else bot_config.current_cash
-                    )
-                    if spend < Decimal("10.00"):
-                        messages.append(
-                            f"{signal_type} signal ignored: Order size (${spend:.2f}) is below minimum "
-                            f"$10.00 USDT (Available cash: ${bot_config.current_cash:.2f})"
-                        )
-                    elif is_live and not binance.is_authenticated:
-                        messages.append(
-                            f"{signal_type} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
-                        )
+                    fixed_qty = getattr(bot_config, "order_qty", None)
+                    if fixed_qty is not None and fixed_qty > 0:
+                        raw_qty = fixed_qty
+                        notional = raw_qty * price
+                        fee = notional * fee_pct
+                        spend = notional + fee
+                        if spend > bot_config.current_cash:
+                            messages.append(
+                                f"{signal_type} signal ignored: Order cost (${spend:.2f} for {raw_qty} {bot_config.symbol}) "
+                                f"exceeds available cash (${bot_config.current_cash:.2f})"
+                            )
+                        elif is_live and not binance.is_authenticated:
+                            messages.append(
+                                f"{signal_type} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
+                            )
+                        else:
+                            opened, open_msg = cls._open_position(
+                                bot_config, binance, target_side, price, raw_qty, spend, candle_time,
+                                mirror=mirror,
+                            )
+                            messages.append(open_msg)
+                            executed = executed or opened
                     else:
-                        fee = spend * fee_pct
-                        investable = spend - fee
-                        raw_qty = investable / price
-                        opened, open_msg = cls._open_position(
-                            bot_config, binance, target_side, price, raw_qty, spend, candle_time,
-                            mirror=mirror,
+                        spend = (
+                            min(bot_config.order_amount_usdt, bot_config.current_cash)
+                            if bot_config.order_amount_usdt > 0
+                            else bot_config.current_cash
                         )
-                        messages.append(open_msg)
-                        executed = executed or opened
+                        if spend < Decimal("10.00"):
+                            messages.append(
+                                f"{signal_type} signal ignored: Order size (${spend:.2f}) is below minimum "
+                                f"$10.00 USDT (Available cash: ${bot_config.current_cash:.2f})"
+                            )
+                        elif is_live and not binance.is_authenticated:
+                            messages.append(
+                                f"{signal_type} signal failed: Bot mode is LIVE but BINANCE_API_KEY/SECRET are missing."
+                            )
+                        else:
+                            fee = spend * fee_pct
+                            investable = spend - fee
+                            raw_qty = investable / price
+                            opened, open_msg = cls._open_position(
+                                bot_config, binance, target_side, price, raw_qty, spend, candle_time,
+                                mirror=mirror,
+                            )
+                            messages.append(open_msg)
+                            executed = executed or opened
         else:
             messages.append("No crossover signal on latest candle. Holding state.")
 

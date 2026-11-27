@@ -47,9 +47,9 @@
             <button onclick="triggerCycle()" id="trigger-btn" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-2">
                 <i class="fa-solid fa-play"></i> Trigger Cycle
             </button>
-            <button onclick="openAccountModal()" class="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5">
-                <i class="fa-solid fa-user-plus"></i> Add Account
-            </button>
+            <a href="{% url 'trading:accounts' %}" class="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5">
+                <i class="fa-solid fa-users-gear"></i> Accounts ({{ accounts|length }})
+            </a>
             <a href="/admin/" class="px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium text-xs rounded-lg border border-gray-700 transition-colors flex items-center gap-1.5">
                 <i class="fa-solid fa-gear"></i> Django Admin
             </a>
@@ -84,67 +84,6 @@
 
     <!-- Status Banner -->
     <div id="status-banner" class="hidden mt-4 p-3 rounded-lg border text-xs font-mono"></div>
-
-    <!-- Super Admin Accounts Management Grid -->
-    <div class="mt-6">
-        <h2 class="text-base font-bold text-white mb-3 flex items-center gap-2">
-            <i class="fa-solid fa-users-gear text-emerald-400"></i> Managed Trading Accounts
-        </h2>
-        <div id="accounts-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {% for acct in accounts %}
-            <div class="glass-card p-4" id="account-card-{{ acct.id }}">
-                <div class="flex flex-wrap justify-between items-start gap-3 pb-3 border-b border-gray-800">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <h3 class="text-base font-bold text-white">{{ acct.name }}</h3>
-                            <span class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                                {{ acct.environment }} • {{ acct.market|upper }} • {{ acct.leverage }}x
-                            </span>
-                            <span id="acct-status-badge-{{ acct.id }}" class="px-2 py-0.5 text-[10px] rounded-full {% if acct.is_active %}bg-emerald-500/10 text-emerald-400 border border-emerald-500/30{% else %}bg-gray-500/10 text-gray-400 border border-gray-500/30{% endif %}">
-                                {% if acct.is_active %}Active{% else %}Paused{% endif %}
-                            </span>
-                        </div>
-                        <div class="text-xs font-mono text-gray-400 mt-1">
-                            API Key: <span class="text-gray-200">{{ acct.masked_api_key }}</span> •
-                            Binance USDT: <span id="acct-usdt-{{ acct.id }}" class="text-emerald-400 font-semibold">--</span>
-                        </div>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-1.5">
-                        <button onclick="testAccount({{ acct.id }})" class="px-2.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-cyan-300 border border-gray-700" title="Test Binance API connection">
-                            <i class="fa-solid fa-plug-circle-check mr-1"></i>Test API
-                        </button>
-                        <button onclick="openEditAccountModal({{ acct.id }})" class="px-2.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">
-                            <i class="fa-solid fa-pen mr-1"></i>Edit
-                        </button>
-                        <button onclick="toggleAccount({{ acct.id }})" id="acct-toggle-btn-{{ acct.id }}" class="px-2.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">
-                            {% if acct.is_active %}Pause Acct{% else %}Start Acct{% endif %}
-                        </button>
-                    </div>
-                </div>
-                <div class="flex flex-wrap items-center justify-between gap-2 pt-3 text-xs">
-                    <div id="acct-health-{{ acct.id }}" class="font-mono text-[11px] {% if acct.last_health_status == 'OK' %}text-emerald-400{% elif acct.last_health_status == 'ERROR' %}text-rose-400{% else %}text-gray-400{% endif %}">
-                        {% if acct.last_health_status %}{{ acct.last_health_status }}: {{ acct.last_health_message|truncatechars:80 }}{% else %}Click "Test API" to verify keys{% endif %}
-                    </div>
-                    <div class="flex flex-wrap items-center gap-1.5">
-                        <button onclick="seedAccountSymbols({{ acct.id }})" class="px-2.5 py-1 text-[11px] rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30">
-                            + Setup 6 Symbols
-                        </button>
-                        <button onclick="bulkToggleAccountBots({{ acct.id }}, 'start')" class="px-2 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-emerald-300 border border-gray-700">
-                            Start All Bots
-                        </button>
-                        <button onclick="bulkToggleAccountBots({{ acct.id }}, 'pause')" class="px-2 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-amber-300 border border-gray-700">
-                            Pause All Bots
-                        </button>
-                    </div>
-                </div>
-            </div>
-            {% empty %}
-            <div class="glass-card p-6 text-center text-gray-400 col-span-2">
-                No Trading Accounts configured yet. Click <strong>Add Account</strong> above to add one!
-            </div>
-            {% endfor %}
-        </div>
-    </div>
 
     <!-- KPI Summary Row -->
     <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mt-6">
@@ -187,115 +126,33 @@
                 </h2>
                 <select id="chart-bot-select" onchange="selectChartBot(this.value)" class="bg-[#0d1117] border border-gray-700 text-xs text-cyan-300 rounded-md px-2.5 py-1 font-mono">
                     {% for bot in bots %}
-                    <option value="{{ bot.id }}">{% if bot.account %}{{ bot.account.name }} — {% endif %}{{ bot.symbol }} ({{ bot.interval }})</option>
+                    <option value="{{ bot.id }}" {% if selected_bot_id == bot.id %}selected{% endif %}>{% if bot.account %}{{ bot.account.name }} — {% endif %}{{ bot.symbol }} ({{ bot.interval }})</option>
                     {% endfor %}
                 </select>
+                {% if selected_bot %}
+                <a href="{% url 'trading:account_detail' selected_bot.account_id %}" class="px-2.5 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">
+                    <i class="fa-solid fa-arrow-left mr-1"></i>{{ selected_bot.account.name }} Bots
+                </a>
+                {% endif %}
             </div>
             <div class="flex items-center gap-3">
                 <span id="chart-legend" class="text-xs font-mono text-gray-300 hidden sm:inline"></span>
                 <span id="last-updated-label" class="text-xs text-gray-400 font-mono">Loading chart...</span>
             </div>
         </div>
-        <div id="ema-chart" class="w-full h-[430px] rounded-lg overflow-hidden border border-gray-800"></div>
-    </div>
-
-    <!-- Bot Configuration & Variable Order Size Controls -->
-    <div class="mt-8">
-        <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
-            <i class="fa-solid fa-sliders text-cyan-400"></i> Bot Configuration &amp; Order Size
-            <span id="bots-header-count" class="text-xs font-mono font-normal px-2.5 py-0.5 rounded-full bg-gray-800 text-gray-300 border border-gray-700">
-                {{ active_bots_count }} Active / {{ total_bots_count }} Total
-            </span>
-        </h2>
-        <div class="grid grid-cols-1 gap-4" id="bot-cards-container">
-            {% for bot in bots %}
-            <div class="glass-card p-5" data-bot-id="{{ bot.id }}">
-                <div class="flex flex-col md:flex-row justify-between md:items-center pb-4 border-b border-gray-800 gap-3">
-                    <div>
-                        <div class="flex flex-wrap items-center gap-2">
-                            {% if bot.account %}
-                            <span class="px-2 py-0.5 text-[10px] font-mono rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                                {{ bot.account.name }} ({{ bot.account.environment }})
-                            </span>
-                            {% endif %}
-                            <h3 class="font-bold text-white text-base">{{ bot.name }}</h3>
-                        </div>
-                        <span class="text-xs font-mono text-cyan-400" id="bot-subtitle-{{ bot.id }}">
-                            {{ bot.symbol }} • {{ bot.interval }} • {{ bot.mode }} • Order Size: ${{ bot.order_amount_usdt|floatformat:2 }}{% if bot.mirror_to_demo and bot.mode == 'PAPER' %} • Demo Mirror{% endif %}
-                        </span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <span class="text-xs font-mono text-gray-300 mr-1" id="bot-price-{{ bot.id }}">--</span>
-                        <button onclick="selectChartBot({{ bot.id }})" class="px-2.5 py-1 text-xs rounded-lg bg-gray-800 hover:bg-gray-700 text-cyan-300 border border-gray-700">
-                            <i class="fa-solid fa-chart-line mr-1"></i>Chart
-                        </button>
-                        <span id="bot-status-badge-{{ bot.id }}" class="px-2.5 py-1 text-xs rounded-full {% if bot.is_active %}bg-emerald-500/10 text-emerald-400 border border-emerald-500/30{% else %}bg-gray-500/10 text-gray-400 border border-gray-500/30{% endif %}">
-                            {% if bot.is_active %}Active{% else %}Paused{% endif %}
-                        </span>
-                        <button onclick="toggleBot({{ bot.id }})" id="bot-toggle-btn-{{ bot.id }}" class="px-3 py-1 text-xs rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700">
-                            {% if bot.is_active %}Pause Bot{% else %}Start Bot{% endif %}
-                        </button>
-                    </div>
-                </div>
-
-                <form onsubmit="saveBotConfig(event, {{ bot.id }})" class="grid grid-cols-2 md:grid-cols-8 gap-3 mt-4 items-end">
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Symbol</label>
-                        <input type="text" id="bot-symbol-{{ bot.id }}" value="{{ bot.symbol }}" class="form-input font-mono uppercase">
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Interval</label>
-                        <select id="bot-interval-{{ bot.id }}" class="form-input">
-                            {% for val, label in interval_choices %}
-                            <option value="{{ val }}" {% if bot.interval == val %}selected{% endif %}>{{ label }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Fast EMA</label>
-                        <input type="number" min="2" max="200" id="bot-fast-{{ bot.id }}" value="{{ bot.fast_ema_period }}" class="form-input font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Slow EMA</label>
-                        <input type="number" min="3" max="400" id="bot-slow-{{ bot.id }}" value="{{ bot.slow_ema_period }}" class="form-input font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Order Size (USDT)</label>
-                        <input type="number" min="10" step="1" id="bot-size-{{ bot.id }}" value="{{ bot.order_amount_usdt }}" class="form-input font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Execution Mode</label>
-                        <select id="bot-mode-{{ bot.id }}" class="form-input">
-                            {% for val, label in mode_choices %}
-                            <option value="{{ val }}" {% if bot.mode == val %}selected{% endif %}>{{ val }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-[11px] text-gray-400 mb-1">Demo Mirror (PAPER)</label>
-                        <label class="flex items-center gap-2 h-[34px] px-2 rounded-md bg-[#0d1117] border border-[#30363d] cursor-pointer">
-                            <input type="checkbox" id="bot-mirror-{{ bot.id }}" {% if bot.mirror_to_demo %}checked{% endif %} class="accent-cyan-500">
-                            <span class="text-[11px] text-gray-300">Send to demo</span>
-                        </label>
-                    </div>
-                    <div>
-                        <button type="submit" id="bot-save-btn-{{ bot.id }}" class="w-full px-3 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-lg transition-colors">
-                            <i class="fa-solid fa-floppy-disk mr-1"></i> Save Settings
-                        </button>
-                    </div>
-                </form>
-
-                <div class="flex flex-wrap gap-6 mt-4 pt-3 border-t border-gray-800/70 text-xs text-gray-400">
-                    <div>Bot Cash: <span id="bot-cash-{{ bot.id }}" class="text-emerald-400 font-mono font-semibold">${{ bot.current_cash|floatformat:2 }}</span></div>
-                    <div>Last Cycle Run: <span id="bot-lastrun-{{ bot.id }}" class="text-gray-200 font-mono">{% if bot.last_run_at %}{{ bot.last_run_at|date:"Y-m-d H:i:s" }} UTC{% else %}Pending{% endif %}</span></div>
-                </div>
+        <!-- Selected Bot EMA & Execution Summary Bar -->
+        <div id="selected-bot-bar" class="flex flex-wrap items-center justify-between gap-3 px-3 py-2 mb-3 rounded-lg bg-[#0d1117] border border-gray-800 text-xs font-mono">
+            <div class="flex flex-wrap items-center gap-4">
+                <span>Bot: <strong id="sb-symbol" class="text-white">{% if selected_bot %}{{ selected_bot.symbol }}{% else %}--{% endif %}</strong></span>
+                <span>Interval: <strong id="sb-interval" class="text-cyan-300">{% if selected_bot %}{{ selected_bot.interval }}{% else %}--{% endif %}</strong></span>
+                <span>EMA: <strong id="sb-ema" class="text-amber-300">{% if selected_bot %}{{ selected_bot.fast_ema_period }} / {{ selected_bot.slow_ema_period }}{% else %}--{% endif %}</strong></span>
+                <span>Qty: <strong id="sb-qty" class="text-emerald-300">{% if selected_bot %}{{ selected_bot.order_qty|default:"--" }}{% else %}--{% endif %}</strong></span>
+                <span>Mode: <strong id="sb-mode" class="text-indigo-300">{% if selected_bot %}{{ selected_bot.mode }}{% else %}--{% endif %}</strong></span>
+                <span>Status: <strong id="sb-status" class="text-gray-200">{% if selected_bot %}{% if selected_bot.is_active %}Active{% else %}Paused{% endif %}{% else %}--{% endif %}</strong></span>
             </div>
-            {% empty %}
-            <div class="glass-card p-6 text-center text-gray-400">
-                No bots configured for this view yet. Use <strong>+ Setup 6 Symbols</strong> on an account or click <strong>Add Symbol Bot</strong>!
-            </div>
-            {% endfor %}
+            <span class="text-[11px] text-gray-400">Chart &amp; EMA lines use this bot's Fast/Slow EMA settings</span>
         </div>
+        <div id="ema-chart" class="w-full h-[430px] rounded-lg overflow-hidden border border-gray-800"></div>
     </div>
 
     <!-- Two-Column Section: Executed Trades & Live Signal Stream -->
@@ -364,7 +221,7 @@
                 <table class="w-full text-xs text-left">
                     <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
                         <tr>
-                            <th class="py-2 pr-2">Time (UTC)</th>
+                            <th class="py-2 pr-2">Time (IST)</th>
                             <th class="py-2 pr-2">Acct / Symbol</th>
                             <th class="py-2 pr-2">Price</th>
                             <th class="py-2 pr-2">Signal</th>
@@ -448,7 +305,7 @@
                 </div>
                 <div id="acct-seed-row" class="flex items-center gap-2 pt-1">
                     <input type="checkbox" id="acct-form-seed" checked class="accent-emerald-500">
-                    <label for="acct-form-seed" class="text-xs text-gray-300">Auto-create all 6 symbols (BTC, SOXL, TQQQ, ETH, NVDA, ANT)</label>
+                    <label for="acct-form-seed" class="text-xs text-gray-300">Auto-create all 6 symbols (BTC, SOXL, QQQ, ETH, NVDA, TSLA)</label>
                 </div>
                 <div class="flex justify-end gap-2 pt-3 border-t border-gray-800">
                     <button type="button" onclick="closeAccountModal()" class="px-4 py-2 text-xs rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700">Cancel</button>
@@ -512,18 +369,39 @@
 
     <script>
         const selectedAccountId = {% if selected_account_id %}{{ selected_account_id }}{% else %}null{% endif %};
-        let selectedChartBotId = null;
+        const botScoped = {% if selected_bot_id %}true{% else %}false{% endif %};
+        let selectedChartBotId = {% if selected_bot_id %}{{ selected_bot_id }}{% else %}null{% endif %};
         let accountsCache = [];
 
         function getCookie(name) {
             const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-            return match ? decodeURIComponent(match[2]) : '';
+            if (match) return decodeURIComponent(match[2]);
+            if (name === 'csrftoken') {
+                return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            }
+            return '';
         }
 
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text ?? '';
             return div.innerHTML;
+        }
+
+        function formatIST(isoStr) {
+            if (!isoStr) return '--';
+            const d = new Date(isoStr);
+            if (Number.isNaN(d.getTime())) return String(isoStr).slice(5, 16);
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Kolkata',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+            }).formatToParts(d);
+            const get = (t) => (parts.find(p => p.type === t) || {}).value || '00';
+            return `${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
         }
 
         function fmtPrice(val) {
@@ -751,7 +629,7 @@
                     if (s.signal === 'BUY') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>';
                     else if (s.signal === 'SELL') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-bold">SELL</span>';
                     return `<tr>
-                        <td class="py-2 pr-2 text-gray-400">${escapeHtml(s.timestamp.slice(5, 16))}</td>
+                        <td class="py-2 pr-2 text-gray-400">${escapeHtml(formatIST(s.timestamp))}</td>
                         <td class="py-2 pr-2 text-white"><span class="text-[10px] text-indigo-300">[${escapeHtml(s.account_name)}]</span> ${escapeHtml(s.symbol)}</td>
                         <td class="py-2 pr-2 text-gray-300">${fmtPrice(s.price)}</td>
                         <td class="py-2 pr-2">${sigBadge}</td>
@@ -858,6 +736,7 @@
                 params.set('chart', fetchChart ? '1' : '0');
                 if (selectedAccountId !== null) params.set('account', String(selectedAccountId));
                 if (selectedChartBotId !== null) params.set('bot_id', String(selectedChartBotId));
+                if (botScoped) params.set('scope', 'bot');
 
                 const res = await fetch(`/api/status/?${params.toString()}`);
                 const data = await res.json();
@@ -901,6 +780,19 @@
                     selectedChartBotId = primary.id;
                     const sel = document.getElementById('chart-bot-select');
                     if (sel) sel.value = String(primary.id);
+
+                    const sbSym = document.getElementById('sb-symbol');
+                    if (sbSym) sbSym.textContent = primary.symbol;
+                    const sbInt = document.getElementById('sb-interval');
+                    if (sbInt) sbInt.textContent = primary.interval;
+                    const sbEma = document.getElementById('sb-ema');
+                    if (sbEma) sbEma.textContent = `${primary.fast_ema} / ${primary.slow_ema}`;
+                    const sbQty = document.getElementById('sb-qty');
+                    if (sbQty) sbQty.textContent = primary.order_qty !== null && primary.order_qty !== undefined ? primary.order_qty : `$${primary.order_amount_usdt.toFixed(2)}`;
+                    const sbMode = document.getElementById('sb-mode');
+                    if (sbMode) sbMode.textContent = primary.mode === 'LIVE' ? 'LIVE' : (primary.mirror_to_demo ? 'DEMO' : 'PAPER');
+                    const sbStatus = document.getElementById('sb-status');
+                    if (sbStatus) sbStatus.textContent = primary.is_active ? 'Active' : 'Paused';
 
                     const desiredWsKey = `${(primary.account_market || 'futures').toLowerCase()}:${primary.symbol.toUpperCase()}`;
                     if (desiredWsKey !== currentWsKey) {

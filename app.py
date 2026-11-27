@@ -92,7 +92,7 @@ if accounts:
     selected_account = accounts[acct_idx]
 
 st.sidebar.subheader("Market Instrument")
-preset_symbols = ["BTCUSDT", "SOXLUSDT", "TQQQUSDT", "ETHUSDT", "NVDAUSDT", "ANTUSDT", "Custom"]
+preset_symbols = ["BTCUSDT", "SOXLUSDT", "QQQUSDT", "ETHUSDT", "NVDAUSDT", "TSLAUSDT", "Custom"]
 selected_symbol_preset = st.sidebar.selectbox("Symbol", preset_symbols, index=0)
 if selected_symbol_preset == "Custom":
     symbol = st.sidebar.text_input("Enter Pair", "BTCUSDT").strip().upper()

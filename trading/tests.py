@@ -284,7 +284,7 @@ class DashboardViewsTests(TestCase):
     def test_dashboard_renders(self):
         resp = self.client.get(reverse("trading:dashboard"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Order Size (USDT)")
+        self.assertContains(resp, "Recent Executed Trades")
 
     def test_update_and_toggle_bot_endpoints(self):
         url = reverse("trading:update_bot", args=[self.bot.id])
@@ -399,7 +399,6 @@ class BotTasksAndCountTests(TestCase):
         dash_resp = client.get(reverse("trading:dashboard"))
         self.assertEqual(dash_resp.status_code, 200)
         self.assertContains(dash_resp, "1 / 2 Active Bot(s)")
-        self.assertContains(dash_resp, "1 Active / 2 Total")
 
         status_resp = client.get(reverse("trading:api_status") + "?chart=0")
         self.assertEqual(status_resp.status_code, 200)
@@ -523,3 +522,232 @@ class MultiAccountSuperAdminTests(TestCase):
         results = run_all_active_bots()
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["account"], "acct1")
+
+
+class BinanceWebSocketCacheTests(TestCase):
+    def setUp(self):
+        from trading.services.binance_ws import ws_manager
+        self.ws_manager = ws_manager
+        self.ws_manager.clear()
+
+    def tearDown(self):
+        self.ws_manager.clear()
+
+    @patch.dict("os.environ", {"BINANCE_USE_WEBSOCKET": "false"})
+    @patch("trading.services.binance_service.Client")
+    def test_ticker_and_klines_use_ws_cache_without_repeat_rest_calls(self, mock_client_cls):
+        from trading.services.binance_service import BinanceService
+
+        mock_client = mock_client_cls.return_value
+        mock_client.futures_symbol_ticker.return_value = {"price": "95000.5"}
+        mock_client.futures_klines.return_value = [
+            [1700000000000, "94000", "95200", "93800", "95000", "12.5", 0, 0, 0, 0, 0, 0],
+        ]
+
+        svc = BinanceService(api_key="", api_secret="", demo=False, testnet=False, market="futures", allow_env_credentials=False)
+        self.assertAlmostEqual(svc.get_ticker_price("BTCUSDT"), 95000.5)
+        self.assertAlmostEqual(svc.get_ticker_price("BTCUSDT"), 95000.5)
+        mock_client.futures_symbol_ticker.assert_called_once()
+
+        # Simulate WebSocket miniTicker update
+        env_key = (False, False, "futures")
+        self.ws_manager._handle_market_message(env_key, {
+            "stream": "btcusdt@miniTicker",
+            "data": {"e": "24hrMiniTicker", "s": "BTCUSDT", "c": "95123.45"},
+        })
+        self.assertAlmostEqual(svc.get_ticker_price("BTCUSDT"), 95123.45)
+
+        # Initial REST kline fetch, then served from WS cache
+        df1 = svc.fetch_klines("BTCUSDT", interval="15m")
+        self.assertEqual(len(df1), 1)
+        mock_client.futures_klines.assert_called_once()
+
+        # Simulate WebSocket kline update for a new candle
+        self.ws_manager._handle_market_message(env_key, {
+            "stream": "btcusdt@kline_15m",
+            "data": {
+                "e": "kline",
+                "s": "BTCUSDT",
+                "k": {"t": 1700000900000, "s": "BTCUSDT", "i": "15m", "o": "95000", "h": "95500", "l": "94900", "c": "95400", "v": "8.0"},
+            },
+        })
+        df2 = svc.fetch_klines("BTCUSDT", interval="15m")
+        self.assertEqual(len(df2), 2)
+        self.assertAlmostEqual(df2["close"].iloc[-1], 95400.0)
+        mock_client.futures_klines.assert_called_once()
+
+    @patch.dict("os.environ", {"BINANCE_USE_WEBSOCKET": "false"})
+    @patch("trading.services.binance_service.Client")
+    def test_account_balances_cached_and_updated_by_user_ws(self, mock_client_cls):
+        from trading.services.binance_service import BinanceService
+
+        mock_client = mock_client_cls.return_value
+        mock_client.futures_account_balance.return_value = [{"asset": "USDT", "availableBalance": "4000.0"}]
+        mock_client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.05"},
+            {"symbol": "ETHUSDT", "positionAmt": "0.0"},
+        ]
+
+        svc = BinanceService(api_key="k1", api_secret="s1", demo=True, testnet=False, market="futures", allow_env_credentials=False)
+        b1 = svc.get_account_balances("BTCUSDT")
+        b2 = svc.get_account_balances("ETHUSDT")
+        self.assertEqual(b1, {"usdt": 4000.0, "asset": 0.05})
+        self.assertEqual(b2, {"usdt": 4000.0, "asset": None})
+        mock_client.futures_account_balance.assert_called_once()
+        mock_client.futures_position_information.assert_called_once()
+
+        # Simulate Futures User Data Stream ACCOUNT_UPDATE
+        acct_key = ("k1", True, False, "futures")
+        self.ws_manager._handle_user_message(acct_key, True, {
+            "e": "ACCOUNT_UPDATE",
+            "a": {
+                "B": [{"a": "USDT", "cw": "4250.75"}],
+                "P": [{"s": "ETHUSDT", "pa": "1.25"}],
+            },
+        })
+        self.assertEqual(svc.get_account_balances("ETHUSDT"), {"usdt": 4250.75, "asset": 1.25})
+        mock_client.futures_account_balance.assert_called_once()
+
+    @patch.dict("os.environ", {"BINANCE_USE_WEBSOCKET": "false"})
+    @patch("trading.services.binance_service.Client")
+    def test_invalid_symbol_error_triggers_cooldown(self, mock_client_cls):
+        from trading.services.binance_service import BinanceService
+
+        mock_client = mock_client_cls.return_value
+        mock_client.futures_symbol_ticker.side_effect = Exception("APIError(code=-1121): Invalid symbol.")
+
+        svc = BinanceService(api_key="", api_secret="", demo=False, testnet=False, market="futures", allow_env_credentials=False)
+        with self.assertRaises(Exception):
+            svc.get_ticker_price("TQQQUSDT")
+        with self.assertRaises(RuntimeError):
+            svc.get_ticker_price("TQQQUSDT")
+        mock_client.futures_symbol_ticker.assert_called_once()
+
+
+class AccountsPageTests(TestCase):
+    def test_accounts_page_requires_superadmin_and_lists_accounts(self):
+        acct = TradingAccount.objects.create(name="nitin", environment="DEMO", market="futures", leverage=5)
+        BotConfig.objects.create(account=acct, name="nitin - BTCUSDT EMA Bot", symbol="BTCUSDT", is_active=True)
+
+        anon_resp = self.client.get(reverse("trading:accounts"))
+        self.assertEqual(anon_resp.status_code, 302)
+        self.assertIn("/login/", anon_resp["Location"])
+
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin_acct", "acct@test.local", "pass1234")
+        self.client.force_login(admin)
+
+        resp = self.client.get(reverse("trading:accounts"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Managed Trading Accounts")
+        self.assertContains(resp, "nitin")
+        self.assertContains(resp, "1 / 1 Bots Active")
+        self.assertContains(resp, reverse("trading:account_detail", args=[acct.id]))
+
+    def test_account_detail_page_shows_only_that_accounts_bots(self):
+        acct1 = TradingAccount.objects.create(name="nitin", environment="DEMO", market="futures", leverage=5)
+        acct2 = TradingAccount.objects.create(name="amol", environment="DEMO", market="futures", leverage=5)
+        b1 = BotConfig.objects.create(account=acct1, name="nitin - BTCUSDT EMA Bot", symbol="BTCUSDT", is_active=True)
+        b2 = BotConfig.objects.create(account=acct2, name="amol - ETHUSDT EMA Bot", symbol="ETHUSDT", is_active=False)
+        Trade.objects.create(
+            bot_config=b1, symbol="BTCUSDT", status="OPEN", side="LONG",
+            entry_time=pd.Timestamp("2026-11-27 10:00:00", tz="UTC"),
+            entry_price=Decimal("60000.00"), quantity=Decimal("0.01"), cost=Decimal("600.00"), notes="nitin-trade",
+        )
+        Trade.objects.create(
+            bot_config=b2, symbol="ETHUSDT", status="OPEN", side="SHORT",
+            entry_time=pd.Timestamp("2026-11-27 10:00:00", tz="UTC"),
+            entry_price=Decimal("2000.00"), quantity=Decimal("0.5"), cost=Decimal("1000.00"), notes="amol-trade",
+        )
+
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin_detail", "detail@test.local", "pass1234")
+        self.client.force_login(admin)
+
+        resp = self.client.get(reverse("trading:account_detail", args=[acct1.id]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'value="BTCUSDT"')
+        self.assertNotContains(resp, 'value="ETHUSDT"')
+        self.assertContains(resp, "nitin-trade")
+        self.assertNotContains(resp, "amol-trade")
+
+    def test_bot_update_and_execution_uses_fixed_order_qty(self):
+        acct = TradingAccount.objects.create(name="qtyacct", environment="PAPER")
+        bot = BotConfig.objects.create(account=acct, name="qtybot", symbol="TSLAUSDT", order_amount_usdt=Decimal("50.00"))
+
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin_qty", "qty@test.local", "pass1234")
+        self.client.force_login(admin)
+
+        resp = self.client.post(
+            reverse("trading:update_bot", args=[bot.id]),
+            data=json.dumps({"symbol": "TSLAUSDT", "interval": "15m", "fast_ema_period": 20, "slow_ema_period": 50, "order_qty": "2.5", "mode": "PAPER", "mirror_to_demo": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        bot.refresh_from_db()
+        self.assertEqual(bot.order_qty, Decimal("2.500000"))
+
+        res = ExecutionService.process_signal(bot, {
+            "signal": "BUY",
+            "timestamp": pd.Timestamp("2026-11-27 12:00:00", tz="UTC"),
+            "price": 400.0,
+            "fast_ema": 405.0,
+            "slow_ema": 395.0,
+        })
+        self.assertTrue(res["executed"])
+        trade = Trade.objects.get(bot_config=bot, status="OPEN")
+        self.assertEqual(trade.quantity, Decimal("2.500000"))
+
+    @patch("trading.views.BinanceService")
+    def test_chart_bot_id_scopes_dashboard_and_ema_settings(self, mock_bs_cls):
+        acct = TradingAccount.objects.create(name="amol", environment="DEMO", market="futures")
+        b1 = BotConfig.objects.create(account=acct, name="b1", symbol="BTCUSDT", fast_ema_period=20, slow_ema_period=50, is_active=True)
+        b2 = BotConfig.objects.create(account=acct, name="b2", symbol="TSLAUSDT", fast_ema_period=9, slow_ema_period=21, is_active=True)
+        Trade.objects.create(
+            bot_config=b1, symbol="BTCUSDT", status="OPEN", side="LONG",
+            entry_time=pd.Timestamp("2026-11-27 10:00:00", tz="UTC"),
+            entry_price=Decimal("60000.00"), quantity=Decimal("0.01"), cost=Decimal("600.00"), notes="btc-only",
+        )
+        Trade.objects.create(
+            bot_config=b2, symbol="TSLAUSDT", status="OPEN", side="LONG",
+            entry_time=pd.Timestamp("2026-11-27 10:00:00", tz="UTC"),
+            entry_price=Decimal("400.00"), quantity=Decimal("1"), cost=Decimal("400.00"), notes="tsla-only",
+        )
+
+        idx = pd.date_range("2026-11-25", periods=30, freq="15min", tz="UTC")
+        df = pd.DataFrame({
+            "open": [400.0] * 30, "high": [402.0] * 30, "low": [398.0] * 30,
+            "close": [400.0 + i for i in range(30)], "volume": [10.0] * 30,
+        }, index=idx)
+        inst = mock_bs_cls.return_value
+        mock_bs_cls.for_bot.return_value = inst
+        mock_bs_cls.from_account.return_value = inst
+        inst.is_authenticated = False
+        inst.is_demo = True
+        inst.demo = True
+        inst.testnet = False
+        inst.market = "futures"
+        inst.get_ticker_price.return_value = 429.0
+        inst.get_account_balances.return_value = {"usdt": 5000.0, "asset": None}
+        inst.fetch_klines.return_value = df
+
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin_chart", "chart@test.local", "pass1234")
+        self.client.force_login(admin)
+
+        dash_resp = self.client.get(reverse("trading:dashboard") + f"?account={acct.id}&bot_id={b2.id}")
+        self.assertEqual(dash_resp.status_code, 200)
+        self.assertContains(dash_resp, "tsla-only")
+        self.assertNotContains(dash_resp, "btc-only")
+        self.assertContains(dash_resp, "9 / 21")
+
+        api_resp = self.client.get(reverse("trading:api_status") + f"?account={acct.id}&bot_id={b2.id}&scope=bot")
+        self.assertEqual(api_resp.status_code, 200)
+        payload = api_resp.json()
+        self.assertEqual(payload["primary_bot_id"], b2.id)
+        self.assertEqual(payload["chart"]["fast_period"], 9)
+        self.assertEqual(payload["chart"]["slow_period"], 21)
+        self.assertEqual(len(payload["recent_trades"]), 1)
+        self.assertEqual(payload["recent_trades"][0]["symbol"], "TSLAUSDT")
+

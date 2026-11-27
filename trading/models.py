@@ -8,10 +8,10 @@ from trading.crypto import decrypt_secret, encrypt_secret
 DEFAULT_BOT_SYMBOLS = (
     "BTCUSDT",
     "SOXLUSDT",
-    "TQQQUSDT",
+    "QQQUSDT",
     "ETHUSDT",
     "NVDAUSDT",
-    "ANTUSDT",
+    "TSLAUSDT",
 )
 
 
@@ -102,7 +102,7 @@ class TradingAccount(models.Model):
                 current_cash=Decimal("10000.00"),
                 order_amount_usdt=Decimal("50.00"),
                 fee_pct=Decimal("0.0010"),
-                mode="PAPER",
+                mode="DEMO" if mirror else "PAPER",
                 mirror_to_demo=mirror,
                 is_active=True,
             )
@@ -126,7 +126,8 @@ class BotConfig(models.Model):
     Can be edited directly via Django Admin or the Super Admin dashboard.
     """
     MODE_CHOICES = (
-        ('PAPER', 'Paper Trading (Simulated)'),
+        ('PAPER', 'Paper Trading (Database Only)'),
+        ('DEMO', 'Demo Account (Binance Demo)'),
         ('LIVE', 'Live Execution (Binance API)'),
     )
 
@@ -161,6 +162,14 @@ class BotConfig(models.Model):
         decimal_places=2,
         default=50.00,
         help_text="Fixed USDT order size per automated BUY (minimum $10)"
+    )
+    order_qty = models.DecimalField(
+        max_digits=16,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        default=None,
+        help_text="Fixed base-asset quantity per order (overrides order_amount_usdt when set)"
     )
     fee_pct = models.DecimalField(max_digits=6, decimal_places=4, default=0.0010, help_text="Trading fee (0.0010 = 0.1%)")
 

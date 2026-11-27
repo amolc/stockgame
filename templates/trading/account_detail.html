@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockGame - {{ account.name }} Bots</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .glass-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; }
+        .form-input { background: #0d1117; border: 1px solid #30363d; color: #f0f6fc; border-radius: 6px; padding: 5px 8px; font-size: 12px; width: 100%; }
+        .form-input:focus { outline: none; border-color: #10b981; }
+    </style>
+</head>
+<body class="p-6 md:p-10">
+    {% csrf_token %}
+
+    <!-- Top Header -->
+    <header class="flex flex-col lg:flex-row justify-between items-start lg:items-center pb-5 border-b border-gray-800 gap-4">
+        <div>
+            <div class="flex items-center gap-2.5">
+                <h1 class="text-xl font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-cyan-400"></i> {{ account.name }}
+                </h1>
+                <span class="px-2 py-0.5 text-[11px] font-mono rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                    {{ account.environment }} • {{ account.market|upper }} • {{ account.leverage }}x
+                </span>
+                <span id="acct-status-badge" class="px-2.5 py-0.5 text-[11px] rounded-full {% if account.is_active %}bg-emerald-500/10 text-emerald-400 border border-emerald-500/30{% else %}bg-gray-500/10 text-gray-400 border border-gray-500/30{% endif %}">
+                    {% if account.is_active %}Active{% else %}Paused{% endif %}
+                </span>
+            </div>
+            <p class="text-xs font-mono text-gray-400 mt-1">
+                API: <span class="text-gray-200">{{ account.masked_api_key }}</span> •
+                Binance USDT: <span id="acct-usdt" class="text-emerald-400 font-semibold">--</span> •
+                <span id="bots-header-count" class="text-gray-300">{{ active_bots_count }} Active / {{ total_bots_count }} Total</span>
+            </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="{% url 'trading:accounts' %}" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium text-xs rounded-lg border border-gray-700 flex items-center gap-1.5">
+                <i class="fa-solid fa-arrow-left"></i> Accounts
+            </a>
+            <a href="/?account={{ account.id }}" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-cyan-300 font-medium text-xs rounded-lg border border-gray-700 flex items-center gap-1.5">
+                <i class="fa-solid fa-chart-line"></i> Dashboard
+            </a>
+            <button onclick="openBotModal()" class="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs rounded-lg flex items-center gap-1.5">
+                <i class="fa-solid fa-plus"></i> Add Bot
+            </button>
+            <button onclick="seedAccountSymbols({{ account.id }})" class="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 font-medium text-xs rounded-lg border border-emerald-500/30">
+                + Setup 6 Symbols
+            </button>
+            <button onclick="bulkToggleAccountBots({{ account.id }}, 'start')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-emerald-300 font-medium text-xs rounded-lg border border-gray-700">
+                Start All
+            </button>
+            <button onclick="bulkToggleAccountBots({{ account.id }}, 'pause')" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-amber-300 font-medium text-xs rounded-lg border border-gray-700">
+                Pause All
+            </button>
+        </div>
+    </header>
+
+    <!-- Status Banner -->
+    <div id="status-banner" class="hidden mt-4 p-3 rounded-lg border text-xs font-mono"></div>
+
+    <!-- Account Balance & Positions (3 Tabs: Paper / Demo / Live) -->
+    <div class="mt-6 glass-card p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-gray-800">
+            <div class="flex items-center gap-2">
+                <button type="button" onclick="switchAccountTab('paper')" id="tab-btn-paper" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700">
+                    Paper <span id="tab-count-paper" class="ml-1 text-[10px] font-mono opacity-80">(0)</span>
+                </button>
+                <button type="button" onclick="switchAccountTab('demo')" id="tab-btn-demo" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700">
+                    Demo <span id="tab-count-demo" class="ml-1 text-[10px] font-mono opacity-80">(0)</span>
+                </button>
+                <button type="button" onclick="switchAccountTab('live')" id="tab-btn-live" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700">
+                    Live <span id="tab-count-live" class="ml-1 text-[10px] font-mono opacity-80">(0)</span>
+                </button>
+            </div>
+            <div class="text-xs font-mono text-gray-400">
+                <span id="tab-balance-label">Account Balance:</span>
+                <span id="tab-balance-value" class="text-emerald-400 font-bold ml-1">--</span>
+                <span id="tab-balance-note" class="text-[11px] text-gray-500 ml-2"></span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto mt-3">
+            <table class="w-full text-xs text-left">
+                <thead class="text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-800">
+                    <tr>
+                        <th class="py-2 pr-3">Symbol</th>
+                        <th class="py-2 pr-3">Side</th>
+                        <th class="py-2 pr-3">Qty</th>
+                        <th class="py-2 pr-3">Entry Price</th>
+                        <th class="py-2 pr-3">Live / Mark</th>
+                        <th class="py-2 pr-3">Unrealized PnL</th>
+                    </tr>
+                </thead>
+                <tbody id="tab-positions-tbody" class="divide-y divide-gray-800 font-mono">
+                    <tr>
+                        <td colspan="6" class="py-4 text-center text-gray-500">Loading positions...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Bots Table -->
+    <div class="mt-6 glass-card overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs text-left">
+                <thead class="bg-[#0d1117]/70 text-[11px] uppercase tracking-wider text-gray-400 border-b border-gray-800">
+                    <tr>
+                        <th class="px-4 py-3">Symbol</th>
+                        <th class="px-3 py-3">Live Price</th>
+                        <th class="px-3 py-3">Interval</th>
+                        <th class="px-3 py-3">Fast / Slow EMA</th>
+                        <th class="px-3 py-3">Qty</th>
+                        <th class="px-3 py-3">Demo / Live</th>
+                        <th class="px-3 py-3">Cash</th>
+                        <th class="px-3 py-3">Last Run</th>
+                        <th class="px-3 py-3">Status</th>
+                        <th class="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/80">
+                    {% for bot in bots %}
+                    <tr class="hover:bg-gray-800/30 transition-colors" data-bot-id="{{ bot.id }}">
+                        <td class="px-4 py-2.5">
+                            <input type="text" id="bot-symbol-{{ bot.id }}" value="{{ bot.symbol }}" class="form-input font-mono uppercase !w-28 !py-1">
+                        </td>
+                        <td class="px-3 py-2.5 font-mono text-cyan-300 whitespace-nowrap" id="bot-price-{{ bot.id }}">--</td>
+                        <td class="px-3 py-2.5 min-w-[90px]">
+                            <select id="bot-interval-{{ bot.id }}" class="form-input !py-1">
+                                {% for val, label in interval_choices %}
+                                <option value="{{ val }}" {% if bot.interval == val %}selected{% endif %}>{{ val }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                        <td class="px-3 py-2.5 whitespace-nowrap">
+                            <div class="flex items-center gap-1">
+                                <input type="number" min="2" max="200" id="bot-fast-{{ bot.id }}" value="{{ bot.fast_ema_period }}" class="form-input font-mono !w-14 !py-1 text-center" title="Fast EMA">
+                                <span class="text-gray-500">/</span>
+                                <input type="number" min="3" max="400" id="bot-slow-{{ bot.id }}" value="{{ bot.slow_ema_period }}" class="form-input font-mono !w-14 !py-1 text-center" title="Slow EMA">
+                            </div>
+                        </td>
+                        <td class="px-3 py-2.5">
+                            <input type="number" min="0" step="any" id="bot-qty-{{ bot.id }}" value="{{ bot.order_qty|default_if_none:'' }}" placeholder="Qty" class="form-input font-mono !w-24 !py-1">
+                        </td>
+                        <td class="px-3 py-2.5 whitespace-nowrap">
+                            <div class="inline-flex items-center gap-3 text-[11px]">
+                                <label class="inline-flex items-center gap-1 cursor-pointer text-cyan-300">
+                                    <input type="checkbox" id="bot-exec-demo-{{ bot.id }}" {% if bot.mode == 'DEMO' or bot.mirror_to_demo %}checked{% endif %} onchange="selectExecType({{ bot.id }}, 'demo')" class="accent-cyan-500 cursor-pointer">
+                                    <span>Demo</span>
+                                </label>
+                                <label class="inline-flex items-center gap-1 cursor-pointer text-emerald-300">
+                                    <input type="checkbox" id="bot-exec-live-{{ bot.id }}" {% if bot.mode == 'LIVE' %}checked{% endif %} onchange="selectExecType({{ bot.id }}, 'live')" class="accent-emerald-500 cursor-pointer">
+                                    <span>Live</span>
+                                </label>
+                            </div>
+                        </td>
+                        <td class="px-3 py-2.5 font-mono text-emerald-400 whitespace-nowrap" id="bot-cash-{{ bot.id }}">${{ bot.current_cash|floatformat:2 }}</td>
+                        <td class="px-3 py-2.5 font-mono text-[11px] text-gray-400 whitespace-nowrap" id="bot-lastrun-{{ bot.id }}">
+                            {% if bot.last_run_at %}{{ bot.last_run_at|date:"m-d H:i:s" }}{% else %}Pending{% endif %}
+                        </td>
+                        <td class="px-3 py-2.5 whitespace-nowrap">
+                            <span id="bot-status-badge-{{ bot.id }}" class="px-2 py-0.5 text-[11px] rounded-full {% if bot.is_active %}bg-emerald-500/10 text-emerald-400 border border-emerald-500/30{% else %}bg-gray-500/10 text-gray-400 border border-gray-500/30{% endif %}">
+                                {% if bot.is_active %}Active{% else %}Paused{% endif %}
+                            </span>
+                        </td>
+                        <td class="px-4 py-2.5 text-right whitespace-nowrap">
+                            <div class="inline-flex items-center gap-1.5">
+                                <button type="button" onclick="saveBotConfig({{ bot.id }})" id="bot-save-btn-{{ bot.id }}" class="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-semibold rounded transition-colors">
+                                    Save
+                                </button>
+                                <button type="button" onclick="toggleBot({{ bot.id }})" id="bot-toggle-btn-{{ bot.id }}" class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-200 text-[11px] rounded border border-gray-700">
+                                    {% if bot.is_active %}Pause{% else %}Start{% endif %}
+                                </button>
+                                <a href="/?account={{ account.id }}&bot_id={{ bot.id }}" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-cyan-300 text-[11px] rounded border border-gray-700" title="View Chart">
+                                    <i class="fa-solid fa-chart-line"></i>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="10" class="px-4 py-8 text-center text-gray-400">
+                            No bots configured for <strong>{{ account.name }}</strong> yet. Click <strong>+ Setup 6 Symbols</strong> or <strong>Add Bot</strong> above!
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Account-Specific Signal Stream & Executed Trades (stacked) -->
+    <div class="grid grid-cols-1 gap-6 mt-6">
+        <div class="glass-card p-5">
+            <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
+                <span><i class="fa-solid fa-satellite-dish text-cyan-400 mr-2"></i> {{ account.name }} Signal Stream</span>
+                <span id="signals-count-label" class="text-xs text-gray-400">{{ total_signals_count }} total</span>
+            </h2>
+            <div class="overflow-x-auto max-h-[380px] overflow-y-auto">
+                <table class="w-full text-xs text-left">
+                    <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
+                        <tr>
+                            <th class="py-2 pr-2">Time (IST)</th>
+                            <th class="py-2 pr-2">Symbol</th>
+                            <th class="py-2 pr-2">Price</th>
+                            <th class="py-2 pr-2">Signal</th>
+                            <th class="py-2">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signals-tbody" class="divide-y divide-gray-800 font-mono">
+                        {% for s in signals %}
+                        <tr>
+                            <td class="py-2 pr-2 text-gray-400">{{ s.timestamp|date:"m-d H:i" }}</td>
+                            <td class="py-2 pr-2 text-white">{{ s.symbol }}</td>
+                            <td class="py-2 pr-2 text-gray-300">${{ s.price|floatformat:2 }}</td>
+                            <td class="py-2 pr-2">
+                                {% if s.signal_type == 'BUY' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>
+                                {% elif s.signal_type == 'SELL' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-bold">SELL</span>
+                                {% else %}
+                                <span class="text-gray-500">HOLD</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-2 text-[11px] text-gray-400" title="{{ s.message }}">{{ s.message }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="py-4 text-center text-gray-500">No signals evaluated yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="glass-card p-5">
+            <h2 class="text-base font-bold text-white mb-3 flex items-center justify-between">
+                <span><i class="fa-solid fa-receipt text-amber-400 mr-2"></i> {{ account.name }} Executed Trades</span>
+                <span id="trades-count-label" class="text-xs text-gray-400">{{ total_trades_count }} total</span>
+            </h2>
+            <div class="overflow-x-auto max-h-[380px] overflow-y-auto">
+                <table class="w-full text-xs text-left">
+                    <thead class="text-gray-400 border-b border-gray-800 sticky top-0 bg-[#161b22]">
+                        <tr>
+                            <th class="py-2 pr-2">ID</th>
+                            <th class="py-2 pr-2">Pair</th>
+                            <th class="py-2 pr-2">Entry</th>
+                            <th class="py-2 pr-2">Entry Time (IST)</th>
+                            <th class="py-2 pr-2">Qty</th>
+                            <th class="py-2 pr-2">Exit</th>
+                            <th class="py-2 pr-2">Exit Time (IST)</th>
+                            <th class="py-2 pr-2">PnL</th>
+                            <th class="py-2 pr-2">Status</th>
+                            <th class="py-2">Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-tbody" class="divide-y divide-gray-800 font-mono">
+                        {% for t in trades %}
+                        <tr>
+                            <td class="py-2.5 pr-2 text-gray-400">#{{ t.id }}</td>
+                            <td class="py-2.5 pr-2 text-cyan-400">{{ t.symbol }} <span class="text-[10px] px-1 py-0.5 rounded {% if t.side == 'SHORT' %}bg-rose-500/20 text-rose-300{% else %}bg-emerald-500/20 text-emerald-300{% endif %}">{{ t.side }}</span></td>
+                            <td class="py-2.5 pr-2 text-white">${{ t.entry_price|floatformat:2 }}</td>
+                            <td class="py-2.5 pr-2 text-gray-400 whitespace-nowrap">{{ t.entry_time|date:"m-d H:i" }}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">{{ t.quantity|floatformat:5 }}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">{% if t.exit_price is not None %}${{ t.exit_price|floatformat:2 }}{% else %}-{% endif %}</td>
+                            <td class="py-2.5 pr-2 text-gray-400 whitespace-nowrap">{% if t.exit_time %}{{ t.exit_time|date:"m-d H:i" }}{% else %}-{% endif %}</td>
+                            <td class="py-2.5 pr-2 font-bold {% if t.pnl is not None and t.pnl >= 0 %}text-emerald-400{% elif t.pnl is not None %}text-rose-400{% else %}text-gray-400{% endif %}">
+                                {% if t.pnl is not None %}${{ t.pnl|floatformat:2 }}{% else %}-{% endif %}
+                            </td>
+                            <td class="py-2.5 pr-2">
+                                {% if t.status == 'OPEN' %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400">HOLDING</span>
+                                {% elif t.is_win %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400">WIN</span>
+                                {% else %}
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400">LOSS</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-2.5 text-[11px] text-gray-400" title="{{ t.notes }}">{{ t.notes }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="10" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Symbol Bot Modal -->
+    <div id="bot-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+        <div class="glass-card p-6 w-full max-w-md shadow-2xl">
+            <div class="flex justify-between items-center pb-3 border-b border-gray-800">
+                <h3 class="text-base font-bold text-white">Add Symbol Bot to {{ account.name }}</h3>
+                <button onclick="closeBotModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form onsubmit="submitBotForm(event)" class="space-y-3 mt-4">
+                <input type="hidden" id="new-bot-account" value="{{ account.id }}">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Symbol</label>
+                        <input type="text" id="new-bot-symbol" required value="BTCUSDT" class="form-input font-mono uppercase">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Interval</label>
+                        <select id="new-bot-interval" class="form-input">
+                            {% for val, label in interval_choices %}
+                            <option value="{{ val }}" {% if val == '15m' %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="grid grid-cols-3 gap-3">
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Fast EMA</label>
+                        <input type="number" id="new-bot-fast" value="20" min="2" max="200" class="form-input font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Slow EMA</label>
+                        <input type="number" id="new-bot-slow" value="50" min="3" max="400" class="form-input font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-gray-400 mb-1">Qty</label>
+                        <input type="number" id="new-bot-qty" value="1" min="0" step="any" class="form-input font-mono">
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-3 border-t border-gray-800">
+                    <button type="button" onclick="closeBotModal()" class="px-4 py-2 text-xs rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700">Cancel</button>
+                    <button type="submit" class="px-4 py-2 text-xs rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold">Create Bot</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const ACCOUNT_ID = {{ account.id }};
+        const ACCOUNT_ENV = "{{ account.environment }}";
+        let activeAccountTab = ACCOUNT_ENV === 'PAPER' ? 'paper' : 'demo';
+        let lastStatusPayload = null;
+
+        function getCookie(name) {
+            const val = document.cookie.split('; ').find(r => r.startsWith(name + '='));
+            if (val) return decodeURIComponent(val.split('=')[1]);
+            if (name === 'csrftoken') {
+                return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            }
+            return '';
+        }
+
+        function fmtPrice(val) {
+            if (val === null || val === undefined) return '--';
+            const num = Number(val);
+            if (Number.isNaN(num)) return '--';
+            const decimals = num >= 100 ? 2 : (num >= 1 ? 4 : 5);
+            return '$' + num.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
+
+        function formatIST(isoStr, withSeconds = false) {
+            if (!isoStr) return '--';
+            const d = new Date(isoStr);
+            if (Number.isNaN(d.getTime())) return String(isoStr).slice(5, withSeconds ? 19 : 16);
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Kolkata',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                ...(withSeconds ? { second: '2-digit' } : {}),
+                hour12: false,
+            }).formatToParts(d);
+            const get = (t) => (parts.find(p => p.type === t) || {}).value || '00';
+            return `${get('month')}-${get('day')} ${get('hour')}:${get('minute')}${withSeconds ? ':' + get('second') : ''}`;
+        }
+
+        function renderTables(data) {
+            const tc = document.getElementById('trades-count-label');
+            const sc = document.getElementById('signals-count-label');
+            if (tc && data.total_trades !== undefined) tc.textContent = `${data.total_trades} total`;
+            if (sc && data.total_signals !== undefined) sc.textContent = `${data.total_signals} total`;
+
+            const tradesBody = document.getElementById('trades-tbody');
+            if (tradesBody) {
+                if (!data.recent_trades || data.recent_trades.length === 0) {
+                    tradesBody.innerHTML = '<tr><td colspan="10" class="py-4 text-center text-gray-500">No executed trades recorded yet.</td></tr>';
+                } else {
+                    tradesBody.innerHTML = data.recent_trades.map(t => {
+                        const exitStr = t.exit_price !== null ? fmtPrice(t.exit_price) : '-';
+                        const entryTimeStr = t.entry_time ? formatIST(t.entry_time) : '-';
+                        const exitTimeStr = t.exit_time ? formatIST(t.exit_time) : '-';
+                        const pnlStr = t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}` : '-';
+                        const pnlCls = t.pnl === null ? 'text-gray-400' : (t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400');
+                        let badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400">LOSS</span>';
+                        if (t.status === 'OPEN') badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-400">HOLDING</span>';
+                        else if (t.is_win) badge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400">WIN</span>';
+                        return `<tr>
+                            <td class="py-2.5 pr-2 text-gray-400">#${t.id}</td>
+                            <td class="py-2.5 pr-2 text-cyan-400">${escapeHtml(t.symbol)} <span class="text-[10px] px-1 py-0.5 rounded ${t.side === 'SHORT' ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'}">${t.side || 'LONG'}</span></td>
+                            <td class="py-2.5 pr-2 text-white">${fmtPrice(t.entry_price)}</td>
+                            <td class="py-2.5 pr-2 text-gray-400 whitespace-nowrap">${escapeHtml(entryTimeStr)}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">${t.quantity.toFixed(5)}</td>
+                            <td class="py-2.5 pr-2 text-gray-300">${exitStr}</td>
+                            <td class="py-2.5 pr-2 text-gray-400 whitespace-nowrap">${escapeHtml(exitTimeStr)}</td>
+                            <td class="py-2.5 pr-2 font-bold ${pnlCls}">${pnlStr}</td>
+                            <td class="py-2.5 pr-2">${badge}</td>
+                            <td class="py-2.5 text-[11px] text-gray-400" title="${escapeHtml(t.notes)}">${escapeHtml(t.notes)}</td>
+                        </tr>`;
+                    }).join('');
+                }
+            }
+
+            const sigBody = document.getElementById('signals-tbody');
+            if (sigBody) {
+                if (!data.recent_signals || data.recent_signals.length === 0) {
+                    sigBody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-gray-500">No signals evaluated yet.</td></tr>';
+                } else {
+                    sigBody.innerHTML = data.recent_signals.map(s => {
+                        let sigBadge = '<span class="text-gray-500">HOLD</span>';
+                        if (s.signal === 'BUY') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">BUY</span>';
+                        else if (s.signal === 'SELL') sigBadge = '<span class="px-2 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-400 font-bold">SELL</span>';
+                        return `<tr>
+                            <td class="py-2 pr-2 text-gray-400">${escapeHtml(formatIST(s.timestamp))}</td>
+                            <td class="py-2 pr-2 text-white">${escapeHtml(s.symbol)}</td>
+                            <td class="py-2 pr-2 text-gray-300">${fmtPrice(s.price)}</td>
+                            <td class="py-2 pr-2">${sigBadge}</td>
+                            <td class="py-2 text-[11px] text-gray-400 truncate max-w-[200px]" title="${escapeHtml(s.message)}">${escapeHtml(s.message)}</td>
+                        </tr>`;
+                    }).join('');
+                }
+            }
+        }
+
+        function showBanner(msg, type = 'info') {
+            const el = document.getElementById('status-banner');
+            el.classList.remove('hidden', 'bg-emerald-950/60', 'border-emerald-500/40', 'text-emerald-300', 'bg-rose-950/60', 'border-rose-500/40', 'text-rose-300', 'bg-gray-900', 'border-gray-700', 'text-gray-300');
+            if (type === 'success') el.classList.add('bg-emerald-950/60', 'border-emerald-500/40', 'text-emerald-300');
+            else if (type === 'error') el.classList.add('bg-rose-950/60', 'border-rose-500/40', 'text-rose-300');
+            else el.classList.add('bg-gray-900', 'border-gray-700', 'text-gray-300');
+            el.textContent = msg;
+        }
+
+        function switchAccountTab(tab) {
+            activeAccountTab = tab;
+            const styles = {
+                paper: 'bg-gray-700 text-white border-gray-500',
+                demo: 'bg-cyan-600/20 text-cyan-300 border-cyan-500/40',
+                live: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40',
+            };
+            for (const t of ['paper', 'demo', 'live']) {
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (!btn) continue;
+                btn.className = `px-3.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${t === tab ? styles[t] : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'}`;
+            }
+            if (lastStatusPayload) renderAccountTab(lastStatusPayload);
+        }
+
+        function renderAccountTab(data) {
+            const bots = data.bots || [];
+            const acct = (data.accounts || []).find(a => a.id === ACCOUNT_ID) || {};
+            const exchPositions = data.exchange_positions || [];
+
+            const paperPositions = bots
+                .filter(b => b.has_open_position && b.open_position)
+                .map(b => ({
+                    symbol: b.symbol,
+                    side: b.open_position.side || 'LONG',
+                    qty: b.open_position.quantity,
+                    entry_price: b.open_position.entry_price,
+                    mark_price: b.live_price,
+                    unrealized_pnl: b.open_position.unrealized_pnl,
+                }));
+
+            const demoBotPositions = bots
+                .filter(b => (b.mode === 'DEMO' || b.mirror_to_demo) && b.has_open_position && b.open_position)
+                .map(b => ({
+                    symbol: b.symbol,
+                    side: b.open_position.side || 'LONG',
+                    qty: b.open_position.quantity,
+                    entry_price: b.open_position.entry_price,
+                    mark_price: b.live_price,
+                    unrealized_pnl: b.open_position.unrealized_pnl,
+                }));
+
+            const isDemoEnv = (acct.environment === 'DEMO' || acct.environment === 'TESTNET');
+            const isLiveEnv = (acct.environment === 'LIVE');
+            const demoPositions = (isDemoEnv && exchPositions.length > 0) ? exchPositions : demoBotPositions;
+            const livePositions = isLiveEnv
+                ? (exchPositions.length > 0 ? exchPositions : bots.filter(b => b.mode === 'LIVE' && b.has_open_position && b.open_position).map(b => ({
+                    symbol: b.symbol, side: b.open_position.side || 'LONG', qty: b.open_position.quantity,
+                    entry_price: b.open_position.entry_price, mark_price: b.live_price, unrealized_pnl: b.open_position.unrealized_pnl,
+                })))
+                : [];
+
+            document.getElementById('tab-count-paper').textContent = `(${paperPositions.length})`;
+            document.getElementById('tab-count-demo').textContent = `(${demoPositions.length})`;
+            document.getElementById('tab-count-live').textContent = `(${livePositions.length})`;
+
+            const balLabel = document.getElementById('tab-balance-label');
+            const balVal = document.getElementById('tab-balance-value');
+            const balNote = document.getElementById('tab-balance-note');
+            let rows = [];
+
+            if (activeAccountTab === 'paper') {
+                const paperCash = bots.reduce((sum, b) => sum + (Number(b.current_cash) || 0), 0);
+                balLabel.textContent = 'Paper DB Cash Total:';
+                balVal.textContent = `$${paperCash.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                balNote.textContent = `All DB trades across ${bots.length} bot(s)`;
+                rows = paperPositions;
+            } else if (activeAccountTab === 'demo') {
+                balLabel.textContent = 'Demo Exchange USDT:';
+                balVal.textContent = (isDemoEnv && acct.usdt_balance !== null && acct.usdt_balance !== undefined)
+                    ? `$${acct.usdt_balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+                    : '--';
+                balNote.textContent = isDemoEnv ? (exchPositions.length > 0 ? 'Live from Binance Demo' : 'Demo account positions') : `Account is ${acct.environment || 'not Demo'}`;
+                rows = demoPositions;
+            } else {
+                balLabel.textContent = 'Live Exchange USDT:';
+                balVal.textContent = (isLiveEnv && acct.usdt_balance !== null && acct.usdt_balance !== undefined)
+                    ? `$${acct.usdt_balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+                    : '--';
+                balNote.textContent = isLiveEnv ? 'Live from Binance' : `Account is ${acct.environment || 'not Live'}`;
+                rows = livePositions;
+            }
+
+            const tbody = document.getElementById('tab-positions-tbody');
+            if (!rows.length) {
+                tbody.innerHTML = `<tr><td colspan="6" class="py-4 text-center text-gray-500">No open ${activeAccountTab} positions.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map(p => {
+                const pnl = Number(p.unrealized_pnl || 0);
+                const pnlCls = pnl >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                const sideCls = p.side === 'SHORT' ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300';
+                return `<tr>
+                    <td class="py-2 pr-3 text-cyan-300 font-semibold">${escapeHtml(p.symbol)}</td>
+                    <td class="py-2 pr-3"><span class="px-1.5 py-0.5 rounded text-[10px] ${sideCls}">${escapeHtml(p.side)}</span></td>
+                    <td class="py-2 pr-3 text-gray-200">${Number(p.qty).toFixed(5)}</td>
+                    <td class="py-2 pr-3 text-white">${fmtPrice(p.entry_price)}</td>
+                    <td class="py-2 pr-3 text-gray-300">${fmtPrice(p.mark_price)}</td>
+                    <td class="py-2 pr-3 font-bold ${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function refreshAccountBots() {
+            try {
+                const res = await fetch(`/api/status/?account=${ACCOUNT_ID}&chart=0`);
+                const data = await res.json();
+                if (!data.ok) return;
+                lastStatusPayload = data;
+                renderAccountTab(data);
+
+                const acct = (data.accounts || []).find(a => a.id === ACCOUNT_ID);
+                if (acct) {
+                    const usdtEl = document.getElementById('acct-usdt');
+                    if (usdtEl) {
+                        usdtEl.textContent = acct.usdt_balance !== null && acct.usdt_balance !== undefined
+                            ? `$${acct.usdt_balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`
+                            : '--';
+                    }
+                }
+
+                const kpis = data.kpis || {};
+                const countEl = document.getElementById('bots-header-count');
+                if (countEl && kpis.active_bots !== undefined) {
+                    countEl.textContent = `${kpis.active_bots} Active / ${kpis.total_bots} Total`;
+                }
+
+                for (const b of (data.bots || [])) {
+                    const priceBadge = document.getElementById(`bot-price-${b.id}`);
+                    if (priceBadge) priceBadge.textContent = b.live_price !== null ? fmtPrice(b.live_price) : '--';
+                    const cashEl = document.getElementById(`bot-cash-${b.id}`);
+                    if (cashEl) cashEl.textContent = `$${b.current_cash.toFixed(2)}`;
+                    const lastEl = document.getElementById(`bot-lastrun-${b.id}`);
+                    if (lastEl && b.last_run_at) lastEl.textContent = formatIST(b.last_run_at, true);
+                }
+                renderTables(data);
+            } catch (err) {
+                console.error('Failed to refresh account bots:', err);
+            }
+        }
+
+        function selectExecType(botId, choice) {
+            const demoEl = document.getElementById(`bot-exec-demo-${botId}`);
+            const liveEl = document.getElementById(`bot-exec-live-${botId}`);
+            if (choice === 'demo' && demoEl.checked) {
+                liveEl.checked = false;
+            } else if (choice === 'live' && liveEl.checked) {
+                demoEl.checked = false;
+            }
+            saveBotConfig(botId);
+        }
+
+        async function saveBotConfig(botId) {
+            const btn = document.getElementById(`bot-save-btn-${botId}`);
+            btn.disabled = true;
+            const isLive = document.getElementById(`bot-exec-live-${botId}`).checked;
+            const isDemo = document.getElementById(`bot-exec-demo-${botId}`).checked;
+            const mode = isLive ? 'LIVE' : (isDemo ? 'DEMO' : 'PAPER');
+            const qtyVal = document.getElementById(`bot-qty-${botId}`).value.trim();
+            const payload = {
+                symbol: document.getElementById(`bot-symbol-${botId}`).value,
+                interval: document.getElementById(`bot-interval-${botId}`).value,
+                fast_ema_period: document.getElementById(`bot-fast-${botId}`).value,
+                slow_ema_period: document.getElementById(`bot-slow-${botId}`).value,
+                order_qty: qtyVal === '' ? null : qtyVal,
+                mode: mode,
+                mirror_to_demo: false
+            };
+            try {
+                const res = await fetch(`/api/bot/${botId}/update/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.ok) {
+                    showBanner(data.error || 'Failed to update bot config.', 'error');
+                } else {
+                    const qtyLabel = data.bot.order_qty !== null ? `Qty ${data.bot.order_qty}` : `$${data.bot.order_amount_usdt.toFixed(2)}`;
+                    showBanner(`Saved ${data.bot.symbol} (${data.bot.interval}, EMA ${data.bot.fast_ema}/${data.bot.slow_ema}, ${qtyLabel}, ${data.bot.mode}).`, 'success');
+                    await refreshAccountBots();
+                }
+            } catch (err) {
+                showBanner(`Save error: ${err}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function toggleBot(botId) {
+            try {
+                const res = await fetch(`/api/bot/${botId}/toggle/`, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCookie('csrftoken') }
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    const badge = document.getElementById(`bot-status-badge-${botId}`);
+                    const btn = document.getElementById(`bot-toggle-btn-${botId}`);
+                    if (data.is_active) {
+                        badge.className = 'px-2 py-0.5 text-[11px] rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                        badge.textContent = 'Active';
+                        btn.textContent = 'Pause';
+                    } else {
+                        badge.className = 'px-2 py-0.5 text-[11px] rounded-full bg-gray-500/10 text-gray-400 border border-gray-500/30';
+                        badge.textContent = 'Paused';
+                        btn.textContent = 'Start';
+                    }
+                    showBanner(`Bot #${botId} is now ${data.is_active ? 'Active' : 'Paused'}.`, 'info');
+                    await refreshAccountBots();
+                }
+            } catch (err) {
+                showBanner(`Toggle error: ${err}`, 'error');
+            }
+        }
+
+        async function seedAccountSymbols(accountId) {
+            const res = await fetch(`/api/accounts/${accountId}/seed-symbols/`, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': getCookie('csrftoken') }
+            });
+            const data = await res.json();
+            if (data.ok) {
+                showBanner(`Added ${data.created_count} symbol(s): ${(data.created_symbols || []).join(', ') || 'all 6 already present'}.`, 'success');
+                if (data.created_count > 0) window.location.reload();
+            }
+        }
+
+        async function bulkToggleAccountBots(accountId, action) {
+            const res = await fetch(`/api/accounts/${accountId}/toggle-bots/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify({ action })
+            });
+            const data = await res.json();
+            if (data.ok) window.location.reload();
+        }
+
+        function openBotModal() { document.getElementById('bot-modal').classList.remove('hidden'); }
+        function closeBotModal() { document.getElementById('bot-modal').classList.add('hidden'); }
+
+        async function submitBotForm(event) {
+            event.preventDefault();
+            const payload = {
+                account_id: document.getElementById('new-bot-account').value,
+                symbol: document.getElementById('new-bot-symbol').value,
+                interval: document.getElementById('new-bot-interval').value,
+                fast_ema_period: document.getElementById('new-bot-fast').value,
+                slow_ema_period: document.getElementById('new-bot-slow').value,
+                order_qty: document.getElementById('new-bot-qty').value,
+            };
+            const res = await fetch('/api/bot/create/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                showBanner(data.error || 'Failed to create bot.', 'error');
+                return;
+            }
+            closeBotModal();
+            window.location.reload();
+        }
+
+        switchAccountTab(activeAccountTab);
+        refreshAccountBots();
+        setInterval(refreshAccountBots, 2000);
+    </script>
+</body>
+</html>

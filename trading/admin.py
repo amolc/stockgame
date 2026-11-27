@@ -80,7 +80,7 @@ class TradingAccountAdmin(admin.ModelAdmin):
             level = messages.SUCCESS if ok else messages.ERROR
             self.message_user(request, f"[{account.name}] {msg}", level=level)
 
-    @admin.action(description="Setup 6 default symbols (BTC, SOXL, TQQQ, ETH, NVDA, ANT)")
+    @admin.action(description="Setup 6 default symbols (BTC, SOXL, QQQ, ETH, NVDA, TSLA)")
     def action_seed_default_symbols(self, request, queryset):
         total_created = 0
         for account in queryset:

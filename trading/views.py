@@ -5,6 +5,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from trading.models import DEFAULT_BOT_SYMBOLS, BotConfig, SignalLog, Trade, TradingAccount
 from trading.services.binance_service import BinanceService
@@ -55,11 +56,14 @@ def _resolve_account_id(request):
         return None
 
 
-def _compute_kpis(account_id=None) -> dict:
-    """Compute portfolio and trade summary metrics from the database (optionally per account)."""
+def _compute_kpis(account_id=None, bot_id=None) -> dict:
+    """Compute portfolio and trade summary metrics from the database (optionally per account or bot)."""
     bot_qs = BotConfig.objects.all()
     trade_qs = Trade.objects.filter(status='CLOSED')
-    if account_id is not None:
+    if bot_id is not None:
+        bot_qs = bot_qs.filter(id=bot_id)
+        trade_qs = trade_qs.filter(bot_config_id=bot_id)
+    elif account_id is not None:
         bot_qs = bot_qs.filter(account_id=account_id)
         trade_qs = trade_qs.filter(bot_config__account_id=account_id)
 
@@ -77,6 +81,7 @@ def _compute_kpis(account_id=None) -> dict:
     }
 
 
+@never_cache
 def login_view(request):
     """Super Admin sign-in page."""
     if request.user.is_authenticated and (request.user.is_staff or request.user.is_superuser):
@@ -117,13 +122,28 @@ def dashboard_view(request):
         signal_qs = signal_qs.filter(bot_config__account_id=account_id)
 
     bots = list(bot_qs)
+    selected_bot = None
+    raw_bot_id = request.GET.get('bot_id')
+    if raw_bot_id:
+        try:
+            req_bot_id = int(raw_bot_id)
+            selected_bot = next((b for b in bots if b.id == req_bot_id), None)
+        except ValueError:
+            selected_bot = None
+
+    if selected_bot is not None:
+        trade_qs = trade_qs.filter(bot_config=selected_bot)
+        signal_qs = signal_qs.filter(bot_config=selected_bot)
+
     trades = list(trade_qs[:30])
     signals = list(signal_qs[:20])
-    kpis = _compute_kpis(account_id=account_id)
+    kpis = _compute_kpis(account_id=account_id, bot_id=selected_bot.id if selected_bot else None)
 
     context = {
         'accounts': accounts,
         'selected_account_id': account_id,
+        'selected_bot': selected_bot,
+        'selected_bot_id': selected_bot.id if selected_bot else None,
         'bots': bots,
         'trades': trades,
         'signals': signals,
@@ -142,6 +162,54 @@ def dashboard_view(request):
         'default_symbols': DEFAULT_BOT_SYMBOLS,
     }
     return render(request, 'trading/dashboard.html', context)
+
+
+@_superadmin_required(api=False)
+def accounts_view(request):
+    """Dedicated Super Admin page listing and managing all TradingAccounts."""
+    accounts = list(TradingAccount.objects.all().order_by('id'))
+    account_rows = [
+        {
+            'account': acct,
+            'bots_active': acct.bots.filter(is_active=True).count(),
+            'bots_total': acct.bots.count(),
+        }
+        for acct in accounts
+    ]
+    context = {
+        'accounts': accounts,
+        'account_rows': account_rows,
+        'environment_choices': TradingAccount.ENVIRONMENT_CHOICES,
+        'market_choices': TradingAccount.MARKET_CHOICES,
+        'default_symbols': DEFAULT_BOT_SYMBOLS,
+    }
+    return render(request, 'trading/accounts.html', context)
+
+
+@_superadmin_required(api=False)
+def account_detail_view(request, account_id: int):
+    """Super Admin detail page showing a single TradingAccount, its bots, trades, and signals."""
+    account = get_object_or_404(TradingAccount, id=account_id)
+    bots = list(BotConfig.objects.filter(account=account).select_related('account').order_by('id'))
+    trade_qs = Trade.objects.filter(bot_config__account=account).select_related('bot_config', 'bot_config__account').order_by('-entry_time')
+    signal_qs = SignalLog.objects.filter(bot_config__account=account).select_related('bot_config', 'bot_config__account').order_by('-timestamp')
+    active_count = sum(1 for b in bots if b.is_active)
+    context = {
+        'account': account,
+        'bots': bots,
+        'trades': list(trade_qs[:30]),
+        'signals': list(signal_qs[:20]),
+        'total_trades_count': trade_qs.count(),
+        'total_signals_count': signal_qs.count(),
+        'active_bots_count': active_count,
+        'total_bots_count': len(bots),
+        'interval_choices': BotConfig.INTERVAL_CHOICES,
+        'mode_choices': BotConfig.MODE_CHOICES,
+        'environment_choices': TradingAccount.ENVIRONMENT_CHOICES,
+        'market_choices': TradingAccount.MARKET_CHOICES,
+        'default_symbols': DEFAULT_BOT_SYMBOLS,
+    }
+    return render(request, 'trading/account_detail.html', context)
 
 
 @_superadmin_required(api=True)
@@ -175,6 +243,7 @@ def api_status_view(request):
             client_cache[key] = BinanceService.for_bot(bot)
         return client_cache[key]
 
+    failed_accounts: set[object] = set()
     bots_data = []
     for bot in bots:
         binance = get_client_for_bot(bot)
@@ -188,16 +257,21 @@ def api_status_view(request):
                 price_cache[env_key] = None
                 market_errors.append(f"{sym}: {exc}")
 
+        acct_err_key = bot.account_id if bot.account_id is not None else "default"
         bal_key = (bot.account_id, sym)
         if bal_key not in balance_cache:
-            try:
-                bal = binance.get_account_balances(sym)
-                balance_cache[bal_key] = bal
-                if bot.account_id is not None and bal.get("usdt") is not None:
-                    account_usdt_cache[bot.account_id] = bal["usdt"]
-            except Exception as exc:
+            if acct_err_key in failed_accounts:
                 balance_cache[bal_key] = {"usdt": None, "asset": None}
-                market_errors.append(f"{bot.account.name if bot.account_id else 'Default'} ({sym}): {exc}")
+            else:
+                try:
+                    bal = binance.get_account_balances(sym)
+                    balance_cache[bal_key] = bal
+                    if bot.account_id is not None and bal.get("usdt") is not None:
+                        account_usdt_cache[bot.account_id] = bal["usdt"]
+                except Exception as exc:
+                    balance_cache[bal_key] = {"usdt": None, "asset": None}
+                    failed_accounts.add(acct_err_key)
+                    market_errors.append(f"{bot.account.name if bot.account_id else 'Default'}: {exc}")
 
         live_price = price_cache[env_key]
         balances = balance_cache[bal_key]
@@ -246,6 +320,7 @@ def api_status_view(request):
             'fast_ema': bot.fast_ema_period,
             'slow_ema': bot.slow_ema_period,
             'order_amount_usdt': float(bot.order_amount_usdt),
+            'order_qty': float(bot.order_qty) if bot.order_qty is not None else None,
             'current_cash': float(bot.current_cash),
             'mode': bot.mode,
             'mirror_to_demo': bot.mirror_to_demo,
@@ -261,13 +336,20 @@ def api_status_view(request):
     # Build accounts summary (fetch USDT balance once per account if not yet cached)
     accounts_data = []
     for acct in accounts:
-        if acct.id not in account_usdt_cache and acct.environment != "PAPER" and acct.has_credentials:
+        if (
+            acct.id not in account_usdt_cache
+            and acct.id not in failed_accounts
+            and acct.environment != "PAPER"
+            and acct.has_credentials
+        ):
             try:
-                acct_client = BinanceService.from_account(acct)
+                acct_client = client_cache.get(acct.id) or BinanceService.from_account(acct)
+                client_cache[acct.id] = acct_client
                 bal = acct_client.get_account_balances("BTCUSDT")
                 account_usdt_cache[acct.id] = bal.get("usdt")
             except Exception as exc:
                 account_usdt_cache[acct.id] = None
+                failed_accounts.add(acct.id)
                 market_errors.append(f"{acct.name}: {exc}")
 
         accounts_data.append({
@@ -351,6 +433,10 @@ def api_status_view(request):
             market_errors.append(f"Chart ({primary_bot.symbol}): {exc}")
 
     primary_client = get_client_for_bot(primary_bot) if primary_bot else BinanceService()
+    scope_bot = request.GET.get('scope') == 'bot' and primary_bot is not None
+    if scope_bot:
+        trade_qs = trade_qs.filter(bot_config=primary_bot)
+        signal_qs = signal_qs.filter(bot_config=primary_bot)
 
     recent_trades = [
         {
@@ -359,11 +445,11 @@ def api_status_view(request):
             'symbol': t.symbol,
             'status': t.status,
             'side': t.side,
-            'entry_time': t.entry_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'entry_time': timezone.localtime(t.entry_time).isoformat(),
             'entry_price': float(t.entry_price),
             'quantity': float(t.quantity),
             'cost': float(t.cost),
-            'exit_time': t.exit_time.strftime('%Y-%m-%d %H:%M:%S') if t.exit_time else None,
+            'exit_time': timezone.localtime(t.exit_time).isoformat() if t.exit_time else None,
             'exit_price': float(t.exit_price) if t.exit_price is not None else None,
             'pnl': float(t.pnl) if t.pnl is not None else None,
             'pnl_pct': float(t.pnl_pct) if t.pnl_pct is not None else None,
@@ -377,7 +463,7 @@ def api_status_view(request):
         {
             'id': s.id,
             'account_name': s.bot_config.account.name if s.bot_config and s.bot_config.account_id else "Default",
-            'timestamp': s.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': timezone.localtime(s.timestamp).isoformat(),
             'symbol': s.symbol,
             'signal': s.signal_type,
             'price': float(s.price),
@@ -392,6 +478,15 @@ def api_status_view(request):
     # Deduplicate market error summary while preserving order
     unique_errors = list(dict.fromkeys(market_errors))
 
+    exchange_positions = []
+    if account_id is not None and account_id in client_cache and account_id not in failed_accounts:
+        try:
+            pos_list = client_cache[account_id].get_exchange_positions()
+            if isinstance(pos_list, list):
+                exchange_positions = pos_list
+        except Exception:
+            exchange_positions = []
+
     return JsonResponse({
         'ok': True,
         'selected_account_id': account_id,
@@ -399,9 +494,10 @@ def api_status_view(request):
         'binance_authenticated': primary_client.is_authenticated,
         'binance_testnet': primary_client.is_demo,
         'market_error': " | ".join(unique_errors) if unique_errors else None,
-        'kpis': _compute_kpis(account_id=account_id),
+        'kpis': _compute_kpis(account_id=account_id, bot_id=primary_bot.id if scope_bot else None),
         'accounts': accounts_data,
         'bots': bots_data,
+        'exchange_positions': exchange_positions,
         'total_trades': trade_qs.count(),
         'total_signals': signal_qs.count(),
         'recent_trades': recent_trades,
@@ -644,13 +740,17 @@ def create_bot_view(request):
         fast_ema = int(payload.get('fast_ema_period', 20))
         slow_ema = int(payload.get('slow_ema_period', 50))
         order_amount = Decimal(str(payload.get('order_amount_usdt', '50.00')))
+        raw_qty = payload.get('order_qty')
+        order_qty = Decimal(str(raw_qty)) if raw_qty is not None and str(raw_qty).strip() != '' else None
     except (ValueError, TypeError, InvalidOperation):
-        return JsonResponse({'ok': False, 'error': 'EMA periods and order size must be valid numbers.'}, status=400)
+        return JsonResponse({'ok': False, 'error': 'EMA periods, order size, and qty must be valid numbers.'}, status=400)
 
     if fast_ema < 2 or slow_ema <= fast_ema:
         return JsonResponse({'ok': False, 'error': 'Fast EMA must be >= 2 and strictly less than Slow EMA.'}, status=400)
     if order_amount < Decimal('10.00'):
         return JsonResponse({'ok': False, 'error': 'Order size must be at least $10.00 USDT.'}, status=400)
+    if order_qty is not None and order_qty <= Decimal('0'):
+        return JsonResponse({'ok': False, 'error': 'Order qty must be greater than 0.'}, status=400)
 
     bot = BotConfig.objects.create(
         account=account,
@@ -660,6 +760,7 @@ def create_bot_view(request):
         fast_ema_period=fast_ema,
         slow_ema_period=slow_ema,
         order_amount_usdt=order_amount,
+        order_qty=order_qty,
         mode=mode,
         mirror_to_demo=_parse_bool(payload.get('mirror_to_demo'), account.environment in ('DEMO', 'TESTNET')),
         is_active=_parse_bool(payload.get('is_active'), True),
@@ -698,19 +799,27 @@ def update_bot_view(request, bot_id: int):
         fast_ema = int(payload.get('fast_ema_period', bot.fast_ema_period))
         slow_ema = int(payload.get('slow_ema_period', bot.slow_ema_period))
         order_amount = Decimal(str(payload.get('order_amount_usdt', bot.order_amount_usdt)))
+        raw_qty = payload.get('order_qty', bot.order_qty)
+        if raw_qty is None or str(raw_qty).strip() == '':
+            order_qty = None
+        else:
+            order_qty = Decimal(str(raw_qty))
     except (ValueError, TypeError, InvalidOperation):
-        return JsonResponse({'ok': False, 'error': 'EMA periods and order size must be valid numbers.'}, status=400)
+        return JsonResponse({'ok': False, 'error': 'EMA periods, order size, and qty must be valid numbers.'}, status=400)
 
     if fast_ema < 2 or slow_ema <= fast_ema:
         return JsonResponse({'ok': False, 'error': 'Fast EMA must be >= 2 and strictly less than Slow EMA.'}, status=400)
     if order_amount < Decimal('10.00'):
         return JsonResponse({'ok': False, 'error': 'Order size must be at least $10.00 USDT.'}, status=400)
+    if order_qty is not None and order_qty <= Decimal('0'):
+        return JsonResponse({'ok': False, 'error': 'Order qty must be greater than 0.'}, status=400)
 
     bot.symbol = symbol
     bot.interval = interval
     bot.fast_ema_period = fast_ema
     bot.slow_ema_period = slow_ema
     bot.order_amount_usdt = order_amount
+    bot.order_qty = order_qty
     bot.mode = mode
     bot.mirror_to_demo = _parse_bool(payload.get('mirror_to_demo'), bot.mirror_to_demo)
     bot.is_active = _parse_bool(payload.get('is_active'), bot.is_active)
@@ -725,6 +834,7 @@ def update_bot_view(request, bot_id: int):
             'fast_ema': bot.fast_ema_period,
             'slow_ema': bot.slow_ema_period,
             'order_amount_usdt': float(bot.order_amount_usdt),
+            'order_qty': float(bot.order_qty) if bot.order_qty is not None else None,
             'mode': bot.mode,
             'mirror_to_demo': bot.mirror_to_demo,
             'is_active': bot.is_active,
