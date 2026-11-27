@@ -129,6 +129,115 @@ class ExecutionServiceTests(TestCase):
         short = Trade.objects.get(bot_config=self.bot, status="OPEN")
         self.assertEqual(short.side, "SHORT")
 
+    def test_paper_mode_mirrors_signals_to_demo_account(self):
+        self.assertTrue(self.bot.mirror_to_demo)
+
+        mock_binance = MagicMock()
+        mock_binance.is_authenticated = True
+        mock_binance.is_demo = True
+        mock_binance.round_quantity.side_effect = lambda sym, qty: Decimal("0.00100")
+        mock_binance.place_market_order.side_effect = [
+            {"orderId": 900, "executedQty": "0.00100", "cummulativeQuoteQty": "50.00"},
+            {"orderId": 901, "executedQty": "0.00100", "cummulativeQuoteQty": "52.00"},
+            {"orderId": 902, "executedQty": "0.00100", "cummulativeQuoteQty": "52.00"},
+        ]
+
+        t1 = datetime(2026, 11, 25, 14, 0, tzinfo=dt_tz.utc)
+        buy_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "BUY", "timestamp": t1, "price": 50000.0, "fast_ema": 50100.0, "slow_ema": 50000.0},
+            binance=mock_binance,
+        )
+        self.assertTrue(buy_res["executed"])
+        trade = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertIn("Demo #900", trade.notes)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.current_cash, Decimal("950.00"))
+        self.assertEqual(trade.cost, Decimal("50.0000"))
+
+        t2 = datetime(2026, 11, 25, 14, 15, tzinfo=dt_tz.utc)
+        sell_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "SELL", "timestamp": t2, "price": 52000.0, "fast_ema": 51800.0, "slow_ema": 51900.0},
+            binance=mock_binance,
+        )
+        self.assertTrue(sell_res["executed"])
+        trade.refresh_from_db()
+        self.assertEqual(trade.status, "CLOSED")
+        self.assertIn("Demo #901", trade.notes)
+        short = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertEqual(short.side, "SHORT")
+        self.assertIn("Demo #902", short.notes)
+        self.assertEqual(mock_binance.place_market_order.call_count, 3)
+
+    def test_paper_mode_does_not_mirror_to_mainnet(self):
+        mock_binance = MagicMock()
+        mock_binance.is_authenticated = True
+        mock_binance.is_demo = False
+
+        t1 = datetime(2026, 11, 25, 15, 0, tzinfo=dt_tz.utc)
+        res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "BUY", "timestamp": t1, "price": 50000.0, "fast_ema": 50100.0, "slow_ema": 50000.0},
+            binance=mock_binance,
+        )
+        self.assertTrue(res["executed"])
+        self.assertEqual(mock_binance.place_market_order.call_count, 0)
+        trade = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertIn("(Paper)", trade.notes)
+
+    def test_switching_to_live_syncs_open_paper_position_to_binance(self):
+        t1 = datetime(2026, 11, 25, 13, 0, tzinfo=dt_tz.utc)
+        buy_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "BUY", "timestamp": t1, "price": 50000.0, "fast_ema": 50100.0, "slow_ema": 50000.0},
+        )
+        self.assertTrue(buy_res["executed"])
+        trade = Trade.objects.get(bot_config=self.bot, status="OPEN")
+        self.assertIn("(Paper)", trade.notes)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.current_cash, Decimal("950.00"))
+
+        self.bot.mode = "LIVE"
+        self.bot.save(update_fields=["mode"])
+
+        mock_binance = MagicMock()
+        mock_binance.is_authenticated = True
+        mock_binance.round_quantity.side_effect = lambda sym, qty: Decimal("0.00100")
+        mock_binance.place_market_order.return_value = {
+            "orderId": 555,
+            "executedQty": "0.00100",
+            "cummulativeQuoteQty": "49.50",
+        }
+
+        t2 = datetime(2026, 11, 25, 13, 15, tzinfo=dt_tz.utc)
+        res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "NONE", "timestamp": t2, "price": 49500.0, "fast_ema": 49400.0, "slow_ema": 49500.0},
+            binance=mock_binance,
+        )
+        self.assertFalse(res["executed"])
+
+        self.assertEqual(mock_binance.place_market_order.call_count, 1)
+        self.assertEqual(mock_binance.place_market_order.call_args.args[1], "BUY")
+
+        trade.refresh_from_db()
+        self.bot.refresh_from_db()
+        self.assertIn("Binance #555", trade.notes)
+        self.assertEqual(trade.quantity, Decimal("0.00100000"))
+        self.assertEqual(trade.cost, Decimal("49.5000"))
+        self.assertEqual(trade.entry_price, Decimal("49500.0000"))
+        self.assertEqual(self.bot.current_cash, Decimal("950.50"))
+
+        # Polling the same candle again must not place a second sync order.
+        dup_res = ExecutionService.process_signal(
+            self.bot,
+            {"signal": "NONE", "timestamp": t2, "price": 49500.0, "fast_ema": 49400.0, "slow_ema": 49500.0},
+            binance=mock_binance,
+        )
+        self.assertTrue(dup_res.get("duplicate"))
+        self.assertEqual(mock_binance.place_market_order.call_count, 1)
+
     def test_paper_short_profit_on_price_drop(self):
         t1 = datetime(2026, 11, 25, 12, 0, tzinfo=dt_tz.utc)
         sell_res = ExecutionService.process_signal(

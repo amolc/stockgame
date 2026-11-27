@@ -41,6 +41,10 @@ class BotConfig(models.Model):
     
     is_active = models.BooleanField(default=True, help_text="Toggle bot execution on or off")
     mode = models.CharField(max_length=10, choices=MODE_CHOICES, default='PAPER')
+    mirror_to_demo = models.BooleanField(
+        default=True,
+        help_text="In PAPER mode, mirror signals to the Binance Demo/Testnet account (requires demo/testnet API keys)"
+    )
     
     last_run_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

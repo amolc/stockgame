@@ -123,6 +123,7 @@ def api_status_view(request):
             'order_amount_usdt': float(bot.order_amount_usdt),
             'current_cash': float(bot.current_cash),
             'mode': bot.mode,
+            'mirror_to_demo': bot.mirror_to_demo,
             'is_active': bot.is_active,
             'live_price': live_price,
             'real_usdt_balance': balances['usdt'],
@@ -281,12 +282,17 @@ def update_bot_view(request, bot_id: int):
     if isinstance(is_active, str):
         is_active = is_active.lower() in ('true', '1', 'yes', 'on')
 
+    mirror_to_demo = payload.get('mirror_to_demo', bot.mirror_to_demo)
+    if isinstance(mirror_to_demo, str):
+        mirror_to_demo = mirror_to_demo.lower() in ('true', '1', 'yes', 'on')
+
     bot.symbol = symbol
     bot.interval = interval
     bot.fast_ema_period = fast_ema
     bot.slow_ema_period = slow_ema
     bot.order_amount_usdt = order_amount
     bot.mode = mode
+    bot.mirror_to_demo = bool(mirror_to_demo)
     bot.is_active = bool(is_active)
     bot.save()
 
@@ -300,6 +306,7 @@ def update_bot_view(request, bot_id: int):
             'slow_ema': bot.slow_ema_period,
             'order_amount_usdt': float(bot.order_amount_usdt),
             'mode': bot.mode,
+            'mirror_to_demo': bot.mirror_to_demo,
             'is_active': bot.is_active,
         }
     })

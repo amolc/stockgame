@@ -6,9 +6,9 @@ from trading.models import BotConfig, Trade, SignalLog
 class BotConfigAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'symbol', 'interval', 'fast_ema_period', 'slow_ema_period',
-        'order_amount_usdt', 'current_cash', 'mode', 'is_active', 'last_run_at'
+        'order_amount_usdt', 'current_cash', 'mode', 'mirror_to_demo', 'is_active', 'last_run_at'
     )
-    list_filter = ('is_active', 'mode', 'interval', 'symbol')
+    list_filter = ('is_active', 'mode', 'mirror_to_demo', 'interval', 'symbol')
     search_fields = ('name', 'symbol')
     readonly_fields = ('created_at', 'updated_at', 'last_run_at')
 

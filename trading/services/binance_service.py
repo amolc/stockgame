@@ -53,6 +53,11 @@ class BinanceService:
     def is_futures(self) -> bool:
         return self.market == "futures"
 
+    @property
+    def is_demo(self) -> bool:
+        """True when orders target a demo/testnet account instead of mainnet."""
+        return self.demo or self.testnet
+
     def fetch_klines(self, symbol: str = "BTCUSDT", interval: str = "15m", lookback: str = "3 days ago UTC") -> pd.DataFrame:
         if self.is_futures:
             # Futures klines ignore start_str; request the most recent window.

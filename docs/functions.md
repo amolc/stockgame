@@ -78,7 +78,7 @@ Class `PaperTradingSimulator(initial_capital=10000.0, fee_pct=0.001)` — backte
 | --- | --- |
 | `__str__() -> str` | Human-readable label with symbol, interval and active/paused status. |
 
-Key fields: `symbol`, `interval`, `lookback`, `fast_ema_period`, `slow_ema_period`, `initial_capital`, `current_cash`, `order_amount_usdt`, `fee_pct`, `is_active`, `mode` (`PAPER`/`LIVE`), `last_run_at`.
+Key fields: `symbol`, `interval`, `lookback`, `fast_ema_period`, `slow_ema_period`, `initial_capital`, `current_cash`, `order_amount_usdt`, `fee_pct`, `is_active`, `mode` (`PAPER`/`LIVE`), `mirror_to_demo`, `last_run_at`.
 
 **`Trade`** — an open or closed position.
 

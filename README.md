@@ -93,3 +93,6 @@ To enable Binance **USDⓈ-M Futures** execution (Demo Trading, Testnet, or Live
    # BINANCE_TESTNET=true
    ```
    The bot will automatically switch to **Authenticated Mode** and trade USDⓈ-M Futures with the configured leverage.
+
+### 📡 Paper Mode → Demo Mirroring
+PAPER bots keep simulated accounting, but can **also send every signal** (open/close/reverse) to the Binance Demo/Testnet account. Enable **Mirror to Demo** on the bot (or set `mirror_to_demo` in Django Admin). Mirroring only runs when `BINANCE_DEMO=true` or `BINANCE_TESTNET=true`; it is intentionally disabled for mainnet keys so paper mode can never place real orders. Demo order ids appear in trade notes as `Demo #<orderId>`.
