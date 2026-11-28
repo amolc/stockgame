@@ -258,7 +258,20 @@ class BinanceWebSocketManager:
             snap = self._account_snapshots.get(acct_key)
             if snap is None:
                 return []
-            return list(snap.get("position_details") or [])
+            _, demo, testnet, market = acct_key
+            env_key = (demo, testnet, market)
+            details = []
+            for p in snap.get("position_details") or []:
+                item = dict(p)
+                live_entry = self._prices.get((env_key, item["symbol"]))
+                if live_entry is not None:
+                    mark = live_entry[1]
+                    item["mark_price"] = mark
+                    if item.get("entry_price"):
+                        diff = (mark - item["entry_price"]) if item["side"] == "LONG" else (item["entry_price"] - mark)
+                        item["unrealized_pnl"] = diff * item["qty"]
+                details.append(item)
+            return details
 
     def get_error_cooldown(self, key: Any) -> Optional[str]:
         with self._lock:
@@ -456,7 +469,7 @@ class BinanceWebSocketManager:
         with self._lock:
             snap = self._account_snapshots.setdefault(
                 acct_key,
-                {"usdt": None, "positions": {}, "spot": {}, "updated_at": time.monotonic()},
+                {"usdt": None, "positions": {}, "position_details": [], "spot": {}, "updated_at": time.monotonic()},
             )
             if is_futures and event_type == "ACCOUNT_UPDATE":
                 acc = msg.get("a") or {}
@@ -466,15 +479,31 @@ class BinanceWebSocketManager:
                         val = b.get("cw", b.get("wb"))
                         if val is not None:
                             snap["usdt"] = float(val)
+                details_by_sym = {
+                    p["symbol"]: dict(p)
+                    for p in (snap.get("position_details") or [])
+                    if p.get("symbol")
+                }
                 for p in acc.get("P", []):
                     sym = (p.get("s") or "").upper()
                     if not sym:
                         continue
-                    amt = abs(float(p.get("pa", 0)))
+                    signed_amt = float(p.get("pa", 0))
+                    amt = abs(signed_amt)
                     if amt > 0:
                         snap["positions"][sym] = amt
+                        details_by_sym[sym] = {
+                            "symbol": sym,
+                            "side": "LONG" if signed_amt > 0 else "SHORT",
+                            "qty": amt,
+                            "entry_price": float(p.get("ep", 0) or 0),
+                            "mark_price": float(p.get("ep", 0) or 0),
+                            "unrealized_pnl": float(p.get("up", 0) or 0),
+                        }
                     else:
                         snap["positions"].pop(sym, None)
+                        details_by_sym.pop(sym, None)
+                snap["position_details"] = list(details_by_sym.values())
                 snap["updated_at"] = time.monotonic()
             elif not is_futures and event_type == "outboundAccountPosition":
                 for b in msg.get("B", []):

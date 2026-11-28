@@ -9,6 +9,7 @@ urlpatterns = [
     path('', views.dashboard_view, name='dashboard'),
     path('accounts/', views.accounts_view, name='accounts'),
     path('accounts/<int:account_id>/', views.account_detail_view, name='account_detail'),
+    path('binance-setup/', views.binance_setup_view, name='binance_setup'),
     path('api/status/', views.api_status_view, name='api_status'),
     path('api/trigger-cycle/', views.trigger_cycle_view, name='trigger_cycle'),
     path('api/accounts/create/', views.create_account_view, name='create_account'),

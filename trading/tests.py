@@ -602,10 +602,12 @@ class BinanceWebSocketCacheTests(TestCase):
             "e": "ACCOUNT_UPDATE",
             "a": {
                 "B": [{"a": "USDT", "cw": "4250.75"}],
-                "P": [{"s": "ETHUSDT", "pa": "1.25"}],
+                "P": [{"s": "ETHUSDT", "pa": "1.25", "ep": "2000.0", "up": "12.5"}],
             },
         })
         self.assertEqual(svc.get_account_balances("ETHUSDT"), {"usdt": 4250.75, "asset": 1.25})
+        exch_pos = svc.get_exchange_positions()
+        self.assertTrue(any(p["symbol"] == "ETHUSDT" and p["side"] == "LONG" and p["qty"] == 1.25 for p in exch_pos))
         mock_client.futures_account_balance.assert_called_once()
 
     @patch.dict("os.environ", {"BINANCE_USE_WEBSOCKET": "false"})
@@ -750,4 +752,18 @@ class AccountsPageTests(TestCase):
         self.assertEqual(payload["chart"]["slow_period"], 21)
         self.assertEqual(len(payload["recent_trades"]), 1)
         self.assertEqual(payload["recent_trades"][0]["symbol"], "TSLAUSDT")
+
+    def test_binance_setup_page_requires_superadmin_and_renders(self):
+        anon_resp = self.client.get(reverse("trading:binance_setup"))
+        self.assertEqual(anon_resp.status_code, 302)
+        self.assertIn("/login/", anon_resp["Location"])
+
+        User = get_user_model()
+        admin = User.objects.create_superuser("superadmin_setup", "setup@test.local", "pass1234")
+        self.client.force_login(admin)
+
+        resp = self.client.get(reverse("trading:binance_setup"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Binance Demo")
+        self.assertContains(resp, "Enable Futures")
 

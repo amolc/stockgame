@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockGame - Binance Demo &amp; Futures Setup Guide</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .glass-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; }
+        code { background: #0d1117; border: 1px solid #30363d; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #79c0ff; }
+    </style>
+</head>
+<body class="p-6 md:p-10">
+
+    <!-- Top Header -->
+    <header class="flex flex-col lg:flex-row justify-between items-start lg:items-center pb-6 border-b border-gray-800 gap-4">
+        <div>
+            <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-book-open text-amber-400"></i> Binance Demo &amp; Futures Setup Guide
+            </h1>
+            <p class="text-sm text-gray-400 mt-1">
+                Step-by-step instructions to create a Binance Demo account, activate Futures trading, and connect API keys to StockGame.
+            </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2.5">
+            <a href="{% url 'trading:dashboard' %}" class="px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium text-xs rounded-lg border border-gray-700 transition-colors flex items-center gap-1.5">
+                <i class="fa-solid fa-chart-line"></i> Dashboard
+            </a>
+            <a href="{% url 'trading:accounts' %}" class="px-3.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs rounded-lg transition-colors flex items-center gap-1.5">
+                <i class="fa-solid fa-users-gear"></i> Accounts
+            </a>
+            <a href="{% url 'trading:binance_setup' %}" class="px-3.5 py-2 bg-amber-500/15 text-amber-300 font-semibold text-xs rounded-lg border border-amber-500/40 flex items-center gap-1.5">
+                <i class="fa-solid fa-book-open"></i> Binance Setup
+            </a>
+        </div>
+    </header>
+
+    <div class="max-w-4xl mx-auto mt-8 space-y-6">
+
+        <!-- Step 1 -->
+        <section class="glass-card p-6">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 text-xs font-bold flex items-center justify-center">1</span>
+                <h2 class="text-lg font-bold text-white">Create / Sign In to a Binance Demo Account</h2>
+            </div>
+            <ol class="list-decimal list-inside space-y-2 text-sm text-gray-300 leading-relaxed">
+                <li>Open <a href="https://demo.binance.com" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline font-mono">https://demo.binance.com</a> in your browser.</li>
+                <li>Click <strong>Log In</strong> (or <strong>Register</strong> if you don't have a Binance account yet) and sign in.</li>
+                <li>Once inside Demo Trading, Binance gives you virtual funds (e.g., <code>5,000 USDT</code>) in a simulated environment — no real funds are used or at risk.</li>
+            </ol>
+            <div class="mt-4 p-3 rounded-lg bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200">
+                <strong>Tip:</strong> Demo Trading keys from <code>demo.binance.com</code> are separate from live <code>binance.com</code> keys and connect to Binance's Demo Futures endpoint (<code>demo-fapi.binance.com</code>).
+            </div>
+        </section>
+
+        <!-- Step 2 -->
+        <section class="glass-card p-6">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center">2</span>
+                <h2 class="text-lg font-bold text-white">Activate Futures Trading &amp; Fund Your Futures Wallet</h2>
+            </div>
+            <ol class="list-decimal list-inside space-y-2.5 text-sm text-gray-300 leading-relaxed">
+                <li>On <code>demo.binance.com</code>, go to <strong>Futures → USDⓈ-M Futures</strong> from the top navigation bar.</li>
+                <li>If prompted to open/activate a Futures account (or complete a quick Futures quiz), accept and activate it.</li>
+                <li>
+                    <strong>Transfer USDT from Spot to USDⓈ-M Futures:</strong>
+                    <ul class="list-disc list-inside ml-5 mt-1 space-y-1 text-gray-400 text-xs">
+                        <li>By default, Demo funds often sit in your <strong>Spot</strong> wallet, leaving your Futures balance at <code>$0.00</code>.</li>
+                        <li>Go to <strong>Assets / Wallet → Transfer</strong>, set <strong>From:</strong> <code>Fiat and Spot</code> → <strong>To:</strong> <code>USDⓈ-M Futures</code>, select <code>USDT</code>, and transfer your desired amount (e.g., <code>5000</code>).</li>
+                    </ul>
+                </li>
+                <li>
+                    <strong>Accept TradFi-Perps Agreement (Required for Stock/ETF Perpetuals):</strong>
+                    <ul class="list-disc list-inside ml-5 mt-1 space-y-1 text-gray-400 text-xs">
+                        <li>If you plan to trade stock/ETF perpetuals like <code>NVDAUSDT</code>, <code>TSLAUSDT</code>, <code>QQQUSDT</code>, or <code>SOXLUSDT</code>, open one of those pairs in the Demo Futures UI and accept the <strong>TradFi-Perps agreement</strong> popup once.</li>
+                        <li>Without accepting this agreement in the UI, API orders on stock perpetuals fail with <code>APIError(code=-4411): Please sign TradFi-Perps agreement contract fapi</code>.</li>
+                    </ul>
+                </li>
+            </ol>
+        </section>
+
+        <!-- Step 3 -->
+        <section class="glass-card p-6">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="w-7 h-7 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center">3</span>
+                <h2 class="text-lg font-bold text-white">Generate Demo API Key &amp; Secret</h2>
+            </div>
+            <ol class="list-decimal list-inside space-y-2.5 text-sm text-gray-300 leading-relaxed">
+                <li>On <code>demo.binance.com</code>, click your <strong>Profile icon → API Management</strong>.</li>
+                <li>Click <strong>Create API</strong> → choose <strong>System generated</strong> (HMAC), give it a label (e.g., <code>stockgame-demo</code>), and complete verification.</li>
+                <li>Copy and save both the <strong>API Key</strong> and <strong>Secret Key</strong> immediately (Binance hides the Secret Key after you leave the page).</li>
+                <li>
+                    Click <strong>Edit restrictions</strong> on the new key and ensure these permissions are checked:
+                    <ul class="list-disc list-inside ml-5 mt-1 space-y-1 text-gray-400 text-xs">
+                        <li><code>Enable Reading</code> (always required)</li>
+                        <li><code>Enable Futures</code> (required to read Futures balances/positions and place Futures orders)</li>
+                    </ul>
+                </li>
+                <li>Click <strong>Save</strong> to apply the permissions.</li>
+            </ol>
+            <div class="mt-4 p-3 rounded-lg bg-amber-950/30 border border-amber-500/30 text-xs text-amber-200">
+                <strong>Important:</strong> If you enable <code>Enable Futures</code> <em>after</em> creating the key, remember to click <strong>Save</strong> at the top of the API Management card.
+            </div>
+        </section>
+
+        <!-- Step 4 -->
+        <section class="glass-card p-6">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="w-7 h-7 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-bold flex items-center justify-center">4</span>
+                <h2 class="text-lg font-bold text-white">Connect the Account in StockGame &amp; Verify</h2>
+            </div>
+            <ol class="list-decimal list-inside space-y-2 text-sm text-gray-300 leading-relaxed">
+                <li>Open the <a href="{% url 'trading:accounts' %}" class="text-cyan-400 hover:underline font-semibold">Accounts</a> page and click <strong>+ Add Account</strong>.</li>
+                <li>Set <strong>Environment</strong> to <code>Binance Demo (demo.binance.com)</code>, <strong>Market</strong> to <code>USDⓈ-M Futures</code>, and choose your <strong>Futures Leverage</strong> (e.g., <code>5</code>).</li>
+                <li>Paste your <strong>API Key</strong> and <strong>API Secret</strong> (secrets are encrypted at rest before saving).</li>
+                <li>Click <strong>Save Account</strong>, then click <strong>Test API</strong> on the account card. You should see: <code>OK: Demo Futures connected. Available USDT: $...</code>.</li>
+            </ol>
+        </section>
+
+        <!-- Step 5 -->
+        <section class="glass-card p-6">
+            <div class="flex items-center gap-3 mb-3">
+                <span class="w-7 h-7 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center justify-center">5</span>
+                <h2 class="text-lg font-bold text-white">Bot Qty &amp; Execution Checklist</h2>
+            </div>
+            <ul class="list-disc list-inside space-y-2 text-sm text-gray-300 leading-relaxed">
+                <li><strong>Paper vs. Demo vs. Live:</strong> Every trade is always recorded in the database (Paper). Checking <strong>Demo</strong> on a bot also sends the order to your Binance Demo account; checking <strong>Live</strong> sends it to Live.</li>
+                <li><strong>Minimum Order Notional (<code>-4164</code>):</strong> Binance Futures enforces a minimum order notional (e.g., <code>$50 USDT</code> on <code>BTCUSDT</code>). For <code>BTCUSDT</code>, set <strong>Qty</strong> to at least <code>0.001</code> (<code>~$60</code> notional) so orders aren't rejected.</li>
+                <li><strong>Supported Demo Symbols:</strong> Default preset symbols verified on Demo Futures are <code>BTCUSDT</code>, <code>SOXLUSDT</code>, <code>QQQUSDT</code>, <code>ETHUSDT</code>, <code>NVDAUSDT</code>, and <code>TSLAUSDT</code>.</li>
+            </ul>
+        </section>
+
+    </div>
+</body>
+</html>

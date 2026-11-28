@@ -212,6 +212,12 @@ def account_detail_view(request, account_id: int):
     return render(request, 'trading/account_detail.html', context)
 
 
+@_superadmin_required(api=False)
+def binance_setup_view(request):
+    """Step-by-step guide for creating a Binance Demo account, API keys, and activating Futures."""
+    return render(request, 'trading/binance_setup.html')
+
+
 @_superadmin_required(api=True)
 def api_status_view(request):
     """JSON API returning accounts, live Binance prices, balances, chart series, and DB state."""
